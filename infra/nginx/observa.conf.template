@@ -1,0 +1,68 @@
+# Include in the Nginx http context. Render with scripts/render_observa_nginx.py.
+limit_req_zone $binary_remote_addr zone=observa_client:10m rate=2r/s;
+limit_req_zone $binary_remote_addr zone=observa_export:5m rate=6r/m;
+limit_req_zone $server_name zone=observa_total:1m rate=40r/s;
+limit_conn_zone $binary_remote_addr zone=observa_conn:5m;
+
+log_format observa_safe '$time_iso8601 $request_id $request_method $status $body_bytes_sent $request_time';
+
+server {
+    listen 80;
+    server_name @HOST@;
+    access_log off;
+    return 308 https://@HOST@$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name @HOST@;
+    ssl_certificate @CERT@;
+    ssl_certificate_key @KEY@;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    access_log /var/log/nginx/observa-access.log observa_safe;
+    error_log /var/log/nginx/observa-error.log crit;
+    server_tokens off;
+
+    limit_conn observa_conn 12;
+    limit_conn_status 429;
+    limit_req_status 429;
+    limit_req zone=observa_total burst=40 nodelay;
+    client_max_body_size 4k;
+    client_header_timeout 10s;
+    client_body_timeout 5s;
+    large_client_header_buffers 2 8k;
+    keepalive_timeout 15s;
+    send_timeout 15s;
+    proxy_connect_timeout 3s;
+    proxy_send_timeout 10s;
+    proxy_read_timeout 25s;
+    proxy_cache off;
+    proxy_hide_header Strict-Transport-Security;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    proxy_set_header Host @HOST@;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Forwarded "";
+    proxy_set_header X-Real-IP "";
+
+    location ~ ^/(analytics|revisao|api/v1/(analytics|content-admin|health))(/|$) {
+        return 404;
+    }
+    location ~ ^/(docs|redoc|openapi\.json)(/|$) {
+        return 404;
+    }
+    location ~ ^/api/v1/.*\.(csv|pdf)$ {
+        limit_req zone=observa_total burst=40 nodelay;
+        limit_req zone=observa_client burst=20 nodelay;
+        limit_req zone=observa_export burst=2 nodelay;
+        proxy_pass http://127.0.0.1:@API_PORT@;
+    }
+    location /api/v1/ {
+        limit_req zone=observa_total burst=40 nodelay;
+        limit_req zone=observa_client burst=20 nodelay;
+        proxy_pass http://127.0.0.1:@API_PORT@;
+    }
+    location / {
+        proxy_pass http://127.0.0.1:@WEB_PORT@;
+    }
+}

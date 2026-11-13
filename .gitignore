@@ -1,0 +1,45 @@
+.firecrawl/
+# Dependências e artefatos locais
+node_modules/
+.next/
+out/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+*.tsbuildinfo
+.DS_Store
+
+# Segredos e dados operacionais
+.env
+.env.*
+!.env.example
+*.dump
+*.sql
+*.dump.gz
+*.sql.gz
+*.backup
+backups/
+coverage/
+
+# Ferramentas de IA e artefatos locais
+# Mantemos `docs/agentes/` versionado porque ele faz parte da documentação do projeto.
+.codex/
+.agents/
+.claude/
+.cursor/
+.windsurf/
+.aider/
+.continue/
+*.prompt
+*.prompts
+*.chat
+*.conversation
+ai-output/
+ai-outputs/
+!.env.production.example
+/.playwright-cli/
+/output/
+/tmp/
+*.dump.age

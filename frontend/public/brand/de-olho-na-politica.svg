@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1080" height="1080" viewBox="0 0 1080 1080" role="img" aria-labelledby="title desc">
+<title id="title">OBSERVA PODER</title>
+<desc id="desc">Olho em azul escuro e verde petróleo, com mapa estilizado do Brasil e alvo de radar no centro. Nome OBSERVA PODER abaixo.</desc>
+<defs>
+  <linearGradient id="navy" x1="0" y1="0" x2="0.7" y2="1"><stop stop-color="#07518A"/><stop offset="0.52" stop-color="#05346A"/><stop offset="1" stop-color="#041A43"/></linearGradient>
+  <linearGradient id="teal" x1="0" y1="0" x2="0.8" y2="1"><stop stop-color="#007D60"/><stop offset="1" stop-color="#004C40"/></linearGradient>
+  <linearGradient id="iris" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#006D4D"/><stop offset="1" stop-color="#003F3B"/></linearGradient>
+  <clipPath id="irisClip"><circle cx="540" cy="382" r="175"/></clipPath>
+</defs>
+<!-- Linhas do olho -->
+<path d="M 116 382 C 249 211 375 128 540 128 C 705 128 831 211 964 382 C 817 303 679 178 540 178 C 401 178 263 303 116 382 Z" fill="url(#navy)"/>
+<path d="M 132 400 C 253 365 325 493 540 540 C 755 493 827 365 948 400 C 820 531 674 612 540 612 C 406 612 260 531 132 400 Z" fill="url(#teal)"/>
+<path d="M 143 398 C 279 428 355 555 540 557 C 725 555 801 428 937 398 C 822 545 672 581 540 581 C 408 581 258 545 143 398 Z" fill="#005444" opacity=".5"/>
+<!-- Iris e linhas de radar -->
+<circle cx="540" cy="382" r="175" fill="url(#iris)"/>
+<circle cx="540" cy="382" r="143" fill="#005842" opacity=".65"/>
+<g clip-path="url(#irisClip)">
+  <!-- Silhueta simplificada do Brasil: contorno vetorial editável -->
+  <path d="M 462 248 L 477 254 L 488 243 L 508 252 L 521 235 L 535 250 L 553 246 L 568 262 L 587 257 L 596 274 L 619 277 L 629 291 L 649 291 L 668 308 L 657 326 L 678 347 L 663 364 L 661 387 L 642 399 L 644 424 L 626 437 L 622 462 L 604 477 L 588 502 L 571 530 L 552 545 L 544 513 L 529 490 L 529 468 L 512 457 L 501 435 L 477 422 L 465 400 L 444 395 L 433 372 L 411 366 L 408 343 L 419 328 L 411 308 L 429 294 L 431 275 L 449 269 Z" fill="#FFFFFF" stroke="#007454" stroke-width="7" stroke-linejoin="round"/>
+  <g stroke="#FFFFFF" stroke-width="11"><path d="M 540 200 V 242 M 540 524 V 560 M 360 382 H 415 M 665 382 H 720"/></g>
+</g>
+<circle cx="540" cy="382" r="76" fill="#FFFFFF"/>
+<circle cx="540" cy="382" r="74" fill="none" stroke="#007356" stroke-width="7"/>
+<circle cx="540" cy="382" r="45" fill="url(#navy)"/>
+<circle cx="526" cy="366" r="11" fill="#FFFFFF"/>
+<g stroke="#007356" stroke-width="9" stroke-linecap="square"><path d="M 540 299 V 328 M 540 436 V 464 M 456 382 H 484 M 596 382 H 625"/></g>
+<!-- Tipografia: texto SVG editável, sem rasterização -->
+<g font-family="Arial, Helvetica, sans-serif" font-weight="900" text-anchor="middle" letter-spacing="-3">
+ <text x="540" y="786" font-size="157" textLength="780" lengthAdjust="spacingAndGlyphs" fill="#062B5B">OBSERVA</text>
+ <text x="540" y="912" font-size="132" textLength="620" lengthAdjust="spacingAndGlyphs" fill="#005746">PODER</text>
+</g>
+<g fill="#00644D"><path d="M 180 948 H 456 V 955 H 180 Z"/><path d="M 467 942 H 614 V 961 H 467 Z"/><path d="M 625 948 H 901 V 955 H 625 Z"/></g>
+</svg>

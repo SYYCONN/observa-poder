@@ -1,0 +1,133 @@
+# Ambiente LOCAL. Não é a configuração de produção da VPS.
+name: de-olho-na-politica
+
+x-logging: &bounded-logs
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app-security: &app-security
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging: *bounded-logs
+
+services:
+  db:
+    image: postgres:17-alpine
+    logging: *bounded-logs
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-politica}
+      POSTGRES_USER: ${POSTGRES_USER:-politica}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [database]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    <<: *app-security
+    build:
+      context: .
+      dockerfile: infra/docker/backend.Dockerfile
+    environment:
+      APP_ENV: development
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-politica}
+      DB_USER: ${POSTGRES_USER:-politica}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}
+      FRONTEND_URL: http://localhost:${FRONTEND_PORT:-3000}
+      ANALYTICS_ENABLED: ${ANALYTICS_ENABLED:-false}
+      ANALYTICS_ADMIN_TOKEN: ${ANALYTICS_ADMIN_TOKEN:-}
+      CONTENT_ADMIN_TOKEN: ${CONTENT_ADMIN_TOKEN:-}
+      ANALYTICS_RETENTION_DAYS: ${ANALYTICS_RETENTION_DAYS:-90}
+    ports: ["127.0.0.1:${BACKEND_PORT:-8000}:8000"]
+    networks: [database, application]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+    init: true
+
+  scheduler:
+    <<: *app-security
+    build:
+      context: .
+      dockerfile: infra/docker/backend.Dockerfile
+    command: ["python", "-m", "app.scheduler"]
+    environment:
+      APP_ENV: development
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-politica}
+      DB_USER: ${POSTGRES_USER:-politica}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      SCHEDULER_RUN_ON_STARTUP: ${SCHEDULER_RUN_ON_STARTUP:-true}
+      DEPUTIES_IMPORT_INTERVAL_MINUTES: ${DEPUTIES_IMPORT_INTERVAL_MINUTES:-1440}
+      DEPUTY_PROFILES_IMPORT_ENABLED: ${DEPUTY_PROFILES_IMPORT_ENABLED:-true}
+      DEPUTY_PROFILES_IMPORT_INTERVAL_MINUTES: ${DEPUTY_PROFILES_IMPORT_INTERVAL_MINUTES:-43200}
+      SENATORS_IMPORT_INTERVAL_MINUTES: ${SENATORS_IMPORT_INTERVAL_MINUTES:-1440}
+      SENATE_LEGISLATION_IMPORT_INTERVAL_MINUTES: ${SENATE_LEGISLATION_IMPORT_INTERVAL_MINUTES:-360}
+      LEGISLATION_IMPORT_INTERVAL_MINUTES: ${LEGISLATION_IMPORT_INTERVAL_MINUTES:-60}
+      CITIZEN_EXPLANATION_PROVIDER: ${CITIZEN_EXPLANATION_PROVIDER:-disabled}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_CITIZEN_GENERATION_MODEL: ${OPENAI_CITIZEN_GENERATION_MODEL:-}
+      OPENAI_CITIZEN_VERIFICATION_MODEL: ${OPENAI_CITIZEN_VERIFICATION_MODEL:-}
+      CITIZEN_EXPLANATION_INTERVAL_MINUTES: ${CITIZEN_EXPLANATION_INTERVAL_MINUTES:-30}
+      CITIZEN_EXPLANATION_BATCH_SIZE: ${CITIZEN_EXPLANATION_BATCH_SIZE:-10}
+      CAMARA_EXPENSES_IMPORT_ENABLED: ${CAMARA_EXPENSES_IMPORT_ENABLED:-true}
+      CAMARA_EXPENSES_IMPORT_INTERVAL_MINUTES: ${CAMARA_EXPENSES_IMPORT_INTERVAL_MINUTES:-1440}
+      CAMARA_EXPENSES_YEAR: ${CAMARA_EXPENSES_YEAR:-2026}
+      CAMARA_REMUNERATION_IMPORT_ENABLED: ${CAMARA_REMUNERATION_IMPORT_ENABLED:-true}
+      CAMARA_REMUNERATION_IMPORT_INTERVAL_MINUTES: ${CAMARA_REMUNERATION_IMPORT_INTERVAL_MINUTES:-43200}
+      CAMARA_STAFF_IMPORT_ENABLED: ${CAMARA_STAFF_IMPORT_ENABLED:-true}
+      CAMARA_STAFF_IMPORT_INTERVAL_MINUTES: ${CAMARA_STAFF_IMPORT_INTERVAL_MINUTES:-43200}
+      PORTAL_TRANSPARENCIA_API_TOKEN: ${PORTAL_TRANSPARENCIA_API_TOKEN:-}
+      PORTAL_AMENDMENTS_IMPORT_ENABLED: ${PORTAL_AMENDMENTS_IMPORT_ENABLED:-true}
+      PORTAL_AMENDMENTS_IMPORT_INTERVAL_MINUTES: ${PORTAL_AMENDMENTS_IMPORT_INTERVAL_MINUTES:-1440}
+      PORTAL_AMENDMENTS_YEAR: ${PORTAL_AMENDMENTS_YEAR:-2026}
+      PORTAL_AMENDMENTS_REQUEST_INTERVAL_SECONDS: ${PORTAL_AMENDMENTS_REQUEST_INTERVAL_SECONDS:-0.25}
+      CAMARA_VOTES_IMPORT_ENABLED: ${CAMARA_VOTES_IMPORT_ENABLED:-true}
+      CAMARA_VOTES_IMPORT_INTERVAL_MINUTES: ${CAMARA_VOTES_IMPORT_INTERVAL_MINUTES:-10080}
+      CAMARA_VOTES_YEAR: ${CAMARA_VOTES_YEAR:-2026}
+      ELECTION_RESULTS_IMPORT_ENABLED: ${ELECTION_RESULTS_IMPORT_ENABLED:-false}
+      ELECTION_RESULTS_YEAR: ${ELECTION_RESULTS_YEAR:-2022}
+      ELECTION_RESULTS_IMPORT_INTERVAL_MINUTES: ${ELECTION_RESULTS_IMPORT_INTERVAL_MINUTES:-525600}
+      PYTHONUNBUFFERED: "1"
+    networks: [database, application]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+
+  frontend:
+    <<: *app-security
+    build:
+      context: .
+      dockerfile: infra/docker/frontend.Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:${BACKEND_PORT:-8000}/api/v1
+        NEXT_PUBLIC_ANALYTICS_ENABLED: ${NEXT_PUBLIC_ANALYTICS_ENABLED:-false}
+    ports: ["127.0.0.1:${FRONTEND_PORT:-3000}:3000"]
+    networks: [application]
+    init: true
+
+volumes:
+  postgres_data:
+
+networks:
+  database:
+    internal: true
+  application:

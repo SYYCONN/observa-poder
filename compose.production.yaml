@@ -1,0 +1,124 @@
+name: observa-poder
+x-logs: &logs
+  driver: local
+  options: {max-size: "10m", max-file: "3"}
+x-process: &process
+  init: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  read_only: true
+  tmpfs: ["/tmp:size=256m,mode=1777"]
+  pids_limit: 128
+  logging: *logs
+x-database-settings: &database-settings
+  APP_ENV: production
+  DB_HOST: db
+  DB_NAME: observa
+  FRONTEND_URL: https://${OBSERVA_HOST:?Defina OBSERVA_HOST}
+  ALLOWED_HOSTS: '["${OBSERVA_HOST:?Defina OBSERVA_HOST}","127.0.0.1"]'
+x-backend-image: &backend-image
+  image: ${OBSERVA_API_IMAGE:?Defina OBSERVA_API_IMAGE}
+  build: {context: ., dockerfile: infra/docker/backend.Dockerfile}
+services:
+  db:
+    image: ${OBSERVA_POSTGRES_IMAGE:?Defina OBSERVA_POSTGRES_IMAGE}
+    environment:
+      POSTGRES_DB: observa
+      POSTGRES_USER: observa_bootstrap
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_bootstrap
+    secrets: [db_bootstrap, db_migrate, db_read, db_collect]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    networks: [database]
+    shm_size: 128m
+    mem_limit: 768m
+    cpus: 1.0
+    security_opt: ["no-new-privileges:true"]
+    logging: *logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -h 127.0.0.1 -U observa_bootstrap -d observa"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    <<: [*process, *backend-image]
+    environment:
+      <<: *database-settings
+      DB_USER: observa_migrate
+    secrets:
+      - {source: db_migrate, target: db_password}
+    command: ["python", "release_db.py"]
+    networks: [database]
+    depends_on:
+      db: {condition: service_healthy}
+  backend:
+    <<: [*process, *backend-image]
+    environment:
+      <<: *database-settings
+      DB_USER: observa_read
+      FORWARDED_ALLOW_IPS: ${OBSERVA_PROXY_PEER:?Defina OBSERVA_PROXY_PEER}
+    secrets:
+      - {source: db_read, target: db_password}
+    command: ["python", "serve_production.py"]
+    ports: ["127.0.0.1:${OBSERVA_API_PORT:-18080}:8000"]
+    networks: [database, web]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    mem_limit: 384m
+    cpus: 0.75
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+  frontend:
+    <<: *process
+    image: ${OBSERVA_WEB_IMAGE:?Defina OBSERVA_WEB_IMAGE}
+    build:
+      context: .
+      dockerfile: infra/docker/frontend.Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: https://${OBSERVA_HOST:?Defina OBSERVA_HOST}/api/v1
+        SITE_URL: https://${OBSERVA_HOST:?Defina OBSERVA_HOST}
+        NEXT_PUBLIC_PRIVACY_CONTACT: ${OBSERVA_PRIVACY_CONTACT:?Defina OBSERVA_PRIVACY_CONTACT}
+    ports: ["127.0.0.1:${OBSERVA_WEB_PORT:-13000}:3000"]
+    networks: [web]
+    mem_limit: 384m
+    cpus: 0.75
+    restart: unless-stopped
+  scheduler:
+    <<: [*process, *backend-image]
+    profiles: [collect]
+    environment:
+      <<: *database-settings
+      DB_USER: observa_collect
+      SCHEDULER_RUN_ON_STARTUP: "false"
+      DEPUTY_PROFILES_IMPORT_ENABLED: "false"
+      CAMARA_EXPENSES_IMPORT_ENABLED: ${OBSERVA_COLLECT_EXPENSES:-false}
+      CAMARA_STAFF_IMPORT_ENABLED: ${OBSERVA_COLLECT_STAFF:-false}
+      PORTAL_AMENDMENTS_IMPORT_ENABLED: ${OBSERVA_COLLECT_AMENDMENTS:-false}
+      CAMARA_VOTES_IMPORT_ENABLED: ${OBSERVA_COLLECT_VOTES:-false}
+    secrets:
+      - {source: db_collect, target: db_password}
+    command: ["python", "-m", "app.scheduler"]
+    networks: [database, collector]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    tmpfs: ["/tmp:size=512m,mode=1777"]
+    mem_limit: 1024m
+    cpus: 0.75
+    restart: unless-stopped
+secrets:
+  db_bootstrap: {file: "${OBSERVA_SECRET_DIR:?Defina OBSERVA_SECRET_DIR}/db_bootstrap"}
+  db_migrate: {file: "${OBSERVA_SECRET_DIR:?Defina OBSERVA_SECRET_DIR}/db_migrate"}
+  db_read: {file: "${OBSERVA_SECRET_DIR:?Defina OBSERVA_SECRET_DIR}/db_read"}
+  db_collect: {file: "${OBSERVA_SECRET_DIR:?Defina OBSERVA_SECRET_DIR}/db_collect"}
+networks:
+  database: {internal: true}
+  web: {}
+  collector: {}
+volumes:
+  postgres_data: {}

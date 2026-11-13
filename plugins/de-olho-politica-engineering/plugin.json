@@ -1,0 +1,32 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "de-olho-politica-engineering",
+  "version": "0.1.0",
+  "description": "Skills para coordenar engenharia, dados e qualidade do portal De Olho na Política.",
+  "author": {
+    "name": "Victor Siconato"
+  },
+  "keywords": [
+    "politica",
+    "engenharia",
+    "codex",
+    "dados-publicos"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "De Olho na Política — Engenharia",
+        "shortDescription": "Agentes do portal político",
+        "longDescription": "Nove skills especializadas para trabalhar com API, deputados, senadores, segurança, legislativo, analytics, SEO/AEO, QA e dados do portal De Olho na Política.",
+        "developerName": "Victor Siconato",
+        "category": "Developer Tools",
+        "capabilities": [],
+        "defaultPrompt": [
+          "Leia o contexto compartilhado antes de atuar.",
+          "Use a skill correspondente à frente do trabalho.",
+          "Informe alterações, validações e pendências concretas."
+        ]
+      }
+    }
+  }
+}
