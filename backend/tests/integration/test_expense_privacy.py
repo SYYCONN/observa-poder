@@ -18,8 +18,10 @@ from app.db.base import Base
 from app.jobs.import_camara_expenses import (
     JOB,
     ExpenseImportFailed,
+    ExpenseSourceError,
     import_camara_expenses,
     official_camara_document_url,
+    open_expense_file,
 )
 from app.jobs.import_deputies import import_deputies
 from app.integrations.camara.schemas import BASE_URL, Deputy
@@ -143,6 +145,24 @@ def ceap_archive(*rows):
     return buffer.getvalue(), hashlib.sha256(payload).hexdigest()
 
 
+def test_expense_archive_enforces_expanded_limit(monkeypatch):
+    monkeypatch.setattr("app.jobs.import_camara_expenses.MAX_EXPANDED_BYTES", 128)
+    content, _ = ceap_archive({"descricao": "x" * 256})
+
+    with pytest.raises(ExpenseSourceError, match="limite de tamanho"), open_expense_file(content):
+        pytest.fail("O ZIP acima do limite foi aceito.")
+
+
+@pytest.mark.parametrize("payload", [b'{"dados":[{}]}{}', b'{"dados":[{},1]}', b'{"dados":[]}'])
+def test_expense_archive_rejects_malformed_expenses(payload):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("Ano-2026.json", payload)
+
+    with pytest.raises(ExpenseSourceError), open_expense_file(buffer.getvalue()) as (_, _, rows):
+        list(rows)
+
+
 def test_expense_provenance_distinguishes_correction_with_same_row_count(engine):
     database, _ = engine
     import_deputies(database, DeputiesClient())
@@ -165,7 +185,8 @@ def test_expense_provenance_distinguishes_correction_with_same_row_count(engine)
         assert str(current.last_run_id) == results[-1]["run_id"]
 
 
-def test_expense_import_recovers_abandoned_run_and_rolls_back_wrong_year(engine):
+def test_expense_import_recovers_abandoned_run_and_rolls_back_wrong_year(engine, monkeypatch):
+    monkeypatch.setattr("app.jobs.import_camara_expenses.BATCH_SIZE", 1)
     database, _ = engine
     import_deputies(database, DeputiesClient())
     row = {"idDocumento": "987", "numeroDeputadoID": 123, "ano": 2026, "valorLiquido": "12,34"}

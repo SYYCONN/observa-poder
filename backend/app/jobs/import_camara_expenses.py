@@ -5,12 +5,15 @@ import hashlib
 import io
 import json
 import zipfile
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
+from itertools import batched
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
+import ijson
 
 from app.integrations.download import download_bytes
 from sqlalchemy import select, text, update
@@ -28,6 +31,8 @@ SOURCE = "camara"
 LOCK_KEY = 2810202606
 NORMALIZER_VERSION = "ceap-v3"
 SOURCE_TEMPLATE = "https://www.camara.leg.br/cotas/Ano-{year}.json.zip"
+MAX_EXPANDED_BYTES = 256 * 1024**2
+BATCH_SIZE = 1000
 
 
 class ExpenseSourceError(Exception):
@@ -76,7 +81,8 @@ def official_camara_document_url(value) -> str | None:
     return candidate
 
 
-def read_expense_file(content: bytes) -> tuple[str, list[dict], str]:
+@contextmanager
+def open_expense_file(content: bytes):
     try:
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             files = [
@@ -86,21 +92,48 @@ def read_expense_file(content: bytes) -> tuple[str, list[dict], str]:
             if len(files) != 1:
                 raise ExpenseSourceError("O arquivo CEAP deve conter um único JSON.")
             filename = files[0].filename
-            max_expanded_bytes = 128 * 1024**2
-            if files[0].file_size > max_expanded_bytes:
+            if files[0].file_size > MAX_EXPANDED_BYTES:
                 raise ExpenseSourceError("JSON anual da CEAP excedeu o limite de tamanho.")
             with archive.open(files[0]) as entry:
-                raw = entry.read(max_expanded_bytes + 1)
-            if len(raw) > max_expanded_bytes:
-                raise ExpenseSourceError("JSON anual da CEAP excedeu o limite de tamanho.")
-        payload = json.loads(raw)
-    except (zipfile.BadZipFile, UnicodeError, json.JSONDecodeError):
+                digest = hashlib.sha256()
+                expanded_bytes = 0
+                while chunk := entry.read(65536):
+                    expanded_bytes += len(chunk)
+                    if expanded_bytes > MAX_EXPANDED_BYTES:
+                        raise ExpenseSourceError("JSON anual da CEAP excedeu o limite de tamanho.")
+                    digest.update(chunk)
+                entry.seek(0)
+                yield filename, digest.hexdigest(), expense_rows(entry)
+    except (zipfile.BadZipFile, UnicodeError, ijson.JSONError):
         raise ExpenseSourceError("O arquivo CEAP não contém um ZIP com JSON válido.") from None
 
-    rows = payload.get("dados") if isinstance(payload, dict) else None
-    if not isinstance(rows, list) or not rows or any(not isinstance(row, dict) for row in rows):
-        raise ExpenseSourceError("O arquivo CEAP não contém uma lista válida de despesas.")
-    return filename, rows, hashlib.sha256(raw).hexdigest()
+
+def expense_rows(entry):
+    invalid_rows = "O arquivo CEAP não contém uma lista válida de despesas."
+    events = ijson.parse(entry)
+    if next(events, None) != ("", "start_map", None):
+        raise ExpenseSourceError(invalid_rows)
+
+    def array_events():
+        found = False
+        for prefix, event, value in events:
+            if (prefix, event, value) == ("", "map_key", "dados"):
+                if found or next(events, None) != ("dados", "start_array", None):
+                    raise ExpenseSourceError(invalid_rows)
+                found = True
+                for item_event in events:
+                    if item_event == ("dados", "end_array", None):
+                        break
+                    yield item_event
+
+    found_row = False
+    for row in ijson.items(array_events(), "dados.item"):
+        if not isinstance(row, dict):
+            raise ExpenseSourceError(invalid_rows)
+        found_row = True
+        yield row
+    if not found_row:
+        raise ExpenseSourceError(invalid_rows)
 
 
 def source_file_record(session: Session, run_id, year: int, payload: dict, digest: str, seen: datetime):
@@ -170,11 +203,10 @@ def import_camara_expenses(engine, year: int | None = None, client=None):
                 url = SOURCE_TEMPLATE.format(year=year)
                 try:
                     content = download_bytes(client, url, max_bytes=48 * 1024**2)
-                except httpx.HTTPError:
+                except (httpx.HTTPError, ValueError):
                     raise ExpenseSourceError("Falha ao baixar o arquivo anual da CEAP.") from None
-                filename, rows, digest = read_expense_file(content)
                 seen = now()
-                with Session(engine) as session:
+                with open_expense_file(content) as (filename, digest, rows), Session(engine) as session:
                     parliamentarian_rows = session.execute(
                         select(Parliamentarian.external_id, Parliamentarian.name, Parliamentarian.id)
                         .where(Parliamentarian.source == SOURCE)
@@ -191,78 +223,85 @@ def import_camara_expenses(engine, year: int | None = None, client=None):
                         session,
                         run_id,
                         year,
-                        {"year": year, "filename": filename, "row_count": len(rows)},
+                        {"year": year, "filename": filename},
                         digest,
                         seen,
                     )
-                    existing = {
-                        row.external_id: row
-                        for row in session.scalars(
-                            select(ParliamentaryExpense).where(
-                                ParliamentaryExpense.source == SOURCE,
-                                ParliamentaryExpense.year == year,
+                    received = inserted = updated = skipped = 0
+                    for batch in batched(rows, BATCH_SIZE):
+                        received += len(batch)
+                        entries = []
+                        for item in batch:
+                            document_id = str(item.get("idDocumento") or "").strip()
+                            external_id = f"{year}:{document_id}" if document_id else ""
+                            entries.append((external_id, item))
+                        existing = {
+                            row.external_id: row
+                            for row in session.scalars(
+                                select(ParliamentaryExpense).where(
+                                    ParliamentaryExpense.source == SOURCE,
+                                    ParliamentaryExpense.external_id.in_(
+                                        {external_id for external_id, _ in entries if external_id}
+                                    ),
+                                )
                             )
-                        )
-                    }
-                    inserted = updated = skipped = 0
-                    for item in rows:
-                        document_id = str(item.get("idDocumento") or "").strip()
-                        item_year = item.get("ano")
-                        if item_year not in (None, "") and str(item_year).strip() != str(year):
-                            raise ExpenseSourceError("O arquivo CEAP contém um exercício incompatível.")
-                        external_id = f"{year}:{document_id}" if document_id else ""
-                        person_id = parliamentarians.get(str(item.get("numeroDeputadoID") or ""))
-                        if person_id is None:
-                            person_id = names.get(normalize_name(item.get("nomeParlamentar")))
-                        if not external_id or person_id is None:
-                            skipped += 1
-                            continue
-                        expense = existing.get(external_id)
-                        if expense is None:
-                            expense = ParliamentaryExpense(
-                                external_id=external_id,
-                                source=SOURCE,
+                        }
+                        for external_id, item in entries:
+                            item_year = item.get("ano")
+                            if item_year not in (None, "") and str(item_year).strip() != str(year):
+                                raise ExpenseSourceError("O arquivo CEAP contém um exercício incompatível.")
+                            person_id = parliamentarians.get(str(item.get("numeroDeputadoID") or ""))
+                            if person_id is None:
+                                person_id = names.get(normalize_name(item.get("nomeParlamentar")))
+                            if not external_id or person_id is None:
+                                skipped += 1
+                                continue
+                            expense = existing.get(external_id)
+                            if expense is None:
+                                expense = ParliamentaryExpense(
+                                    external_id=external_id,
+                                    source=SOURCE,
+                                )
+                                session.add(expense)
+                                existing[external_id] = expense
+                                inserted += 1
+                            else:
+                                updated += 1
+                            expense.parliamentarian_id = person_id
+                            expense.occurred_on = parse_date(item.get("dataEmissao"))
+                            expense.year = year
+                            expense.month = item.get("mes")
+                            expense.category = item.get("descricao") or "Categoria não informada"
+                            expense.category_detail = item.get("descricaoEspecificacao") or None
+                            expense.supplier_name = item.get("fornecedor") or None
+                            expense.document_number = item.get("numero") or None
+                            expense.document_type = item.get("tipoDocumento") or None
+                            expense.amount_document = parse_decimal(item.get("valorDocumento"))
+                            expense.amount_glossed = parse_decimal(item.get("valorGlosa"))
+                            expense.amount_net = parse_decimal(item.get("valorLiquido"))
+                            expense.reimbursement = item.get("ressarcimento") or None
+                            expense.source_document_url = official_camara_document_url(
+                                item.get("urlDocumento")
                             )
-                            session.add(expense)
-                            existing[external_id] = expense
-                            inserted += 1
-                        else:
-                            updated += 1
-                        expense.parliamentarian_id = person_id
-                        expense.occurred_on = parse_date(item.get("dataEmissao"))
-                        expense.year = year
-                        expense.month = item.get("mes")
-                        expense.category = item.get("descricao") or "Categoria não informada"
-                        expense.category_detail = item.get("descricaoEspecificacao") or None
-                        expense.supplier_name = item.get("fornecedor") or None
-                        expense.document_number = item.get("numero") or None
-                        expense.document_type = item.get("tipoDocumento") or None
-                        expense.amount_document = parse_decimal(item.get("valorDocumento"))
-                        expense.amount_glossed = parse_decimal(item.get("valorGlosa"))
-                        expense.amount_net = parse_decimal(item.get("valorLiquido"))
-                        expense.reimbursement = item.get("ressarcimento") or None
-                        expense.source_document_url = official_camara_document_url(
-                            item.get("urlDocumento")
-                        )
-                        expense.source_url = source_url
-                        expense.collected_at = seen
-                        expense.source_record_id = source_record.id
-                        if (inserted + updated) % 2000 == 0:
-                            session.flush()
+                            expense.source_url = source_url
+                            expense.collected_at = seen
+                            expense.source_record_id = source_record.id
+                        session.flush()
+                    source_record.payload = {**source_record.payload, "row_count": received}
                     run = session.get(ImportRun, run_id)
                     run.status = "success"
                     run.finished_at = now()
-                    run.received = len(rows)
+                    run.received = received
                     run.inserted = inserted
                     run.updated = updated
-                    run.unchanged = max(len(rows) - skipped - inserted - updated, 0)
+                    run.unchanged = max(received - skipped - inserted - updated, 0)
                     run.pages = 1
                     session.commit()
                 return {
                     "run_id": str(run_id),
                     "status": "success",
                     "year": year,
-                    "received": len(rows),
+                    "received": received,
                     "inserted": inserted,
                     "updated": updated,
                     "skipped": skipped,

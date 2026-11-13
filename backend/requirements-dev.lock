@@ -75,6 +75,10 @@ idna==3.20
     #   anyio
     #   httpx
     #   requests
+ijson==3.6.0
+    # via
+    #   -c requirements.lock
+    #   de-olho-na-politica-api (pyproject.toml)
 iniconfig==2.3.1
     # via pytest
 license-expression==30.4.4
