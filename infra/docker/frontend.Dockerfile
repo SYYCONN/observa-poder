@@ -1,4 +1,4 @@
-FROM node:22-alpine AS dependencies
+FROM node:25-alpine AS dependencies
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -16,7 +16,7 @@ ARG SITE_URL
 ENV SITE_URL=$SITE_URL
 RUN npm run build
 
-FROM node:22-alpine AS runner
+FROM node:25-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000
 COPY --from=builder --chown=node:node /app/.next/standalone ./
