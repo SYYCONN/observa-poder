@@ -6,13 +6,14 @@ import tempfile
 from random import random
 import time
 from datetime import date, datetime, timezone
+from itertools import batched
 from pathlib import Path
 from uuid import uuid4
 
 import httpx
 
 from app.integrations.download import bounded_chunks
-from sqlalchemy import select, text
+from sqlalchemy import select, text, tuple_, update
 from sqlalchemy.orm import Session
 
 from app.db.session import get_engine
@@ -27,6 +28,7 @@ SOURCE = "camara"
 JOB = "camara.annual_votes"
 LOCK_KEY = 2810202605
 NORMALIZER_VERSION = "camara-votes-v1"
+VOTE_BATCH_SIZE = 1000
 VOTINGS_URL = "https://dadosabertos.camara.leg.br/arquivos/votacoes/csv/votacoes-{year}.csv"
 VOTES_URL = "https://dadosabertos.camara.leg.br/arquivos/votacoesVotos/csv/votacoesVotos-{year}.csv"
 
@@ -147,6 +149,16 @@ def import_camara_votes(engine, year: int | None = None, client=None):
             lock.commit()
             try:
                 with Session(engine) as session, session.begin():
+                    session.execute(
+                        update(ImportRun)
+                        .where(ImportRun.job == JOB, ImportRun.status == "running")
+                        .values(
+                            status="interrupted",
+                            finished_at=started,
+                            error_code="interrupted",
+                            error_message="Execução anterior interrompida. A coleta foi reiniciada.",
+                        )
+                    )
                     session.add(ImportRun(id=run_id, job=JOB, status="running", started_at=started))
 
                 votings_url = VOTINGS_URL.format(year=year)
@@ -254,47 +266,52 @@ def import_camara_votes(engine, year: int | None = None, client=None):
                         received += 1
                         if received % 2000 == 0:
                             session.flush()
+                    session.flush()
 
                     vote_received = vote_inserted = vote_updated = vote_skipped = 0
-                    existing_votes = {
-                        (vote.voting_id, vote.parliamentarian_id): vote
-                        for vote in session.scalars(
-                            select(Vote)
-                            .join(Voting, Voting.id == Vote.voting_id)
-                            .where(Voting.source == SOURCE)
-                        )
-                    }
-                    for item in rows(votes_path):
-                        external_id = (item.get("idVotacao") or "").strip()
-                        person_id = people.get((item.get("deputado_id") or "").strip())
-                        voting = voting_rows.get(external_id)
-                        position = (item.get("voto") or "").strip()
-                        if not external_id or voting is None or person_id is None or not position:
-                            vote_skipped += 1
-                            continue
-                        voting.mode = "nominal"
-                        key = (voting.id, person_id)
-                        vote = existing_votes.get(key)
-                        if vote is None:
-                            vote = Vote(
-                                voting_id=voting.id, parliamentarian_id=person_id, position=position
+                    for batch in batched(rows(votes_path), VOTE_BATCH_SIZE):
+                        entries = []
+                        for item in batch:
+                            external_id = (item.get("idVotacao") or "").strip()
+                            person_id = people.get((item.get("deputado_id") or "").strip())
+                            voting = voting_rows.get(external_id)
+                            position = (item.get("voto") or "").strip()
+                            if not external_id or voting is None or person_id is None or not position:
+                                vote_skipped += 1
+                                continue
+                            voting.mode = "nominal"
+                            entries.append(((voting.id, person_id), position, item))
+                        keys = {key for key, _, _ in entries}
+                        existing_votes = {
+                            (vote.voting_id, vote.parliamentarian_id): vote
+                            for vote in session.scalars(
+                                select(Vote).where(
+                                    tuple_(Vote.voting_id, Vote.parliamentarian_id).in_(keys)
+                                )
                             )
-                            session.add(vote)
-                            existing_votes[key] = vote
-                            vote_inserted += 1
-                        else:
-                            vote_updated += 1
-                        vote.position = position
-                        vote.registered_at = parse_datetime(item.get("dataHoraVoto"))
-                        vote.party_at_vote = item.get("deputado_siglaPartido") or None
-                        vote.state_at_vote = item.get("deputado_siglaUf") or None
-                        vote.source = SOURCE
-                        vote.source_url = item.get("uriVotacao") or votes_url
-                        vote.collected_at = seen
-                        vote.source_record_id = votes_record.id
-                        vote_received += 1
-                        if vote_received % 5000 == 0:
-                            session.flush()
+                        }
+                        for key, position, item in entries:
+                            voting_id, person_id = key
+                            vote = existing_votes.get(key)
+                            if vote is None:
+                                vote = Vote(
+                                    voting_id=voting_id, parliamentarian_id=person_id, position=position
+                                )
+                                session.add(vote)
+                                existing_votes[key] = vote
+                                vote_inserted += 1
+                            else:
+                                vote_updated += 1
+                            vote.position = position
+                            vote.registered_at = parse_datetime(item.get("dataHoraVoto"))
+                            vote.party_at_vote = item.get("deputado_siglaPartido") or None
+                            vote.state_at_vote = item.get("deputado_siglaUf") or None
+                            vote.source = SOURCE
+                            vote.source_url = item.get("uriVotacao") or votes_url
+                            vote.collected_at = seen
+                            vote.source_record_id = votes_record.id
+                            vote_received += 1
+                        session.flush()
 
                     run = session.get(ImportRun, run_id)
                     run.status = "success"
