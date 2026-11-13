@@ -7,7 +7,7 @@ name = "de-olho-na-politica-api"
 version = "0.1.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-  "fastapi>=0.115,<1",
+  "fastapi>=0.162.2,<1",
   "uvicorn>=0.34,<1",
   "pydantic-settings>=2.7,<3",
   "sqlalchemy>=2.0,<2.1",
