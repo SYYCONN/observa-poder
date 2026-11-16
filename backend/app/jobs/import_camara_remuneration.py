@@ -126,7 +126,7 @@ def import_camara_remuneration(engine, year: int, month: int, client=None):
                             )
                         )
                     }
-                    inserted = updated = skipped = 0
+                    inserted = updated = skipped = missing_details = 0
                     for name, base_url in links:
                         person_id = _match_person(name, people)
                         if person_id is None:
@@ -134,6 +134,10 @@ def import_camara_remuneration(engine, year: int, month: int, client=None):
                             continue
                         detail_url = remuneration_month_url(base_url, year, month)
                         detail = client.get(detail_url)
+                        if detail.status_code == httpx.codes.NOT_FOUND:
+                            missing_details += 1
+                            skipped += 1
+                            continue
                         detail.raise_for_status()
                         parsed = parse_remuneration_page(detail.text)
                         if parsed["fixed_amount"] is None and parsed["net_amount"] is None:
@@ -177,6 +181,7 @@ def import_camara_remuneration(engine, year: int, month: int, client=None):
                     "inserted": inserted,
                     "updated": updated,
                     "skipped": skipped,
+                    "missing_details": missing_details,
                 }
             except Exception as exc:
                 with Session(engine) as session, session.begin():
