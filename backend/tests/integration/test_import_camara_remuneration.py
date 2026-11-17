@@ -16,7 +16,8 @@ from app.modules.financas.models import ParliamentaryRemuneration
 from app.modules.parlamentares.models import Parliamentarian
 
 
-def test_import_remuneration_keeps_available_details_when_one_returns_404():
+@pytest.mark.parametrize("month, published", [(10, True), (11, False)])
+def test_import_remuneration_keeps_available_details_when_one_returns_404(month, published):
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         pytest.skip("Execute scripts/test_backend.py para PostgreSQL isolado.")
@@ -58,10 +59,17 @@ def test_import_remuneration_keeps_available_details_when_one_returns_404():
                 return httpx.Response(200, text=rows)
             if request.url.path.endswith("/sem-ficha"):
                 return httpx.Response(404)
-            return httpx.Response(200, text="<td>a - Remuneração Fixa</td><td>46.366,19</td>")
+            return httpx.Response(200, text="10 2026 - FOLHA NORMAL <td>a - Remuneração Fixa</td><td>46.366,19</td>")
 
         with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-            result = import_camara_remuneration(engine, 2026, 10, client=client)
+            if not published:
+                with pytest.raises(RuntimeError, match="competência"):
+                    import_camara_remuneration(engine, 2026, month, client=client)
+                with Session(engine) as session:
+                    assert session.scalars(select(ParliamentaryRemuneration)).all() == []
+                    assert session.scalars(select(ImportRun).where(ImportRun.job == "camara.parliamentary_remuneration")).one().status == "failed"
+                return
+            result = import_camara_remuneration(engine, 2026, month, client=client)
         assert result["status"] == "success"
         assert result["inserted"] == result["skipped"] == result["missing_details"] == 1
         with Session(engine) as session:

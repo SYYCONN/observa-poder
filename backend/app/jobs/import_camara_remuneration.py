@@ -9,6 +9,7 @@ import httpx
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.core.collector_http import public_html_client
 from app.core.dates import local_today
 from app.db.session import get_engine
 from app.integrations.camara.remuneration import (
@@ -44,11 +45,7 @@ def _match_person(name: str, people: list[tuple[str, object]]) -> object | None:
 
 def import_camara_remuneration(engine, year: int, month: int, client=None):
     owns_client = client is None
-    client = client or httpx.Client(
-        timeout=httpx.Timeout(30, connect=10),
-        follow_redirects=True,
-        headers={"Accept": "text/html", "User-Agent": "DeOlhoNaPolitica/0.1"},
-    )
+    client = client or public_html_client()
     run_id = uuid4()
     started = now()
     try:
@@ -126,7 +123,7 @@ def import_camara_remuneration(engine, year: int, month: int, client=None):
                             )
                         )
                     }
-                    inserted = updated = skipped = missing_details = 0
+                    inserted = updated = skipped = missing_details = mismatched_periods = 0
                     for name, base_url in links:
                         person_id = _match_person(name, people)
                         if person_id is None:
@@ -140,6 +137,10 @@ def import_camara_remuneration(engine, year: int, month: int, client=None):
                             continue
                         detail.raise_for_status()
                         parsed = parse_remuneration_page(detail.text)
+                        if (parsed["year"], parsed["month"]) != (year, month):
+                            mismatched_periods += 1
+                            skipped += 1
+                            continue
                         if parsed["fixed_amount"] is None and parsed["net_amount"] is None:
                             skipped += 1
                             continue
@@ -164,6 +165,8 @@ def import_camara_remuneration(engine, year: int, month: int, client=None):
                         row.source_url = source_url
                         row.collected_at = seen
                         row.source_record_id = source_record.id
+                    if inserted + updated == 0:
+                        raise RuntimeError("A fonte ainda não publicou valores da competência solicitada.")
                     run = session.get(ImportRun, run_id)
                     run.status = "success"
                     run.finished_at = now()
@@ -182,6 +185,7 @@ def import_camara_remuneration(engine, year: int, month: int, client=None):
                     "updated": updated,
                     "skipped": skipped,
                     "missing_details": missing_details,
+                    "mismatched_periods": mismatched_periods,
                 }
             except Exception as exc:
                 with Session(engine) as session, session.begin():

@@ -7,6 +7,7 @@ responsiva enquanto uma coleta consulta e normaliza os dados da Câmara.
 import logging
 import time
 from collections.abc import Callable
+from datetime import timedelta
 
 from sqlalchemy.engine import Engine
 
@@ -31,6 +32,7 @@ logger = logging.getLogger("de_olho.scheduler")
 
 def run_job(name: str, job: Callable[[], dict]) -> None:
     started = time.monotonic()
+    logger.info("Coleta automática iniciada: %s", name)
     try:
         job()
     except Exception as exc:
@@ -44,6 +46,13 @@ def run_job(name: str, job: Callable[[], dict]) -> None:
 def current_competence() -> dict[str, int]:
     today = local_today()
     return {"year": today.year, "month": today.month}
+
+
+def remuneration_competence() -> dict[str, int]:
+    """Folha do último mês encerrado; não antecipa publicação da fonte."""
+    today = local_today()
+    previous = today.replace(day=1) - timedelta(days=1)
+    return {"year": previous.year, "month": previous.month}
 
 
 def run_forever() -> None:
@@ -109,7 +118,7 @@ def run_forever() -> None:
             (
                 "camara.parliamentary_expenses",
                 lambda current_engine: import_camara_expenses(
-                    current_engine, year=settings.camara_expenses_year
+                    current_engine, year=settings.camara_expenses_year or local_today().year
                 ),
                 settings.camara_expenses_import_interval_minutes * 60,
             )
@@ -120,7 +129,7 @@ def run_forever() -> None:
                 "camara.parliamentary_remuneration",
                 lambda current_engine: import_camara_remuneration(
                     current_engine,
-                    **current_competence(),
+                    **remuneration_competence(),
                 ),
                 settings.camara_remuneration_import_interval_minutes * 60,
             )
@@ -142,7 +151,7 @@ def run_forever() -> None:
                 "portal.parliamentary_amendments_open_data",
                 lambda current_engine: import_portal_amendments_open_data(
                     current_engine,
-                    year=settings.portal_amendments_year,
+                    year=settings.portal_amendments_year or local_today().year,
                 ),
                 settings.portal_amendments_import_interval_minutes * 60,
             )
@@ -152,7 +161,7 @@ def run_forever() -> None:
             (
                 "camara.annual_votes",
                 lambda current_engine: import_camara_votes(
-                    current_engine, year=settings.camara_votes_year
+                    current_engine, year=settings.camara_votes_year or local_today().year
                 ),
                 settings.camara_votes_import_interval_minutes * 60,
             )
@@ -169,6 +178,10 @@ def run_forever() -> None:
     if not settings.scheduler_run_on_startup:
         now = time.monotonic()
         next_run = {name: now + interval for name, _, interval in jobs}
+
+    for name, _, interval in jobs:
+        logger.info("Coleta agendada: %s; intervalo=%sm; executar_ao_iniciar=%s",
+                    name, interval // 60, settings.scheduler_run_on_startup)
 
     while True:
         for name, job, interval in jobs:

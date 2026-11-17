@@ -9,6 +9,7 @@ import httpx
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
+from app.core.collector_http import public_html_client
 from app.core.dates import local_today
 from app.db.session import get_engine
 from app.integrations.camara.staff import (
@@ -50,11 +51,7 @@ def _match_lotacao(name: str, lotacoes: list[str]) -> str | None:
 
 def import_camara_staff(engine, year: int, month: int, client=None):
     owns_client = client is None
-    client = client or httpx.Client(
-        timeout=httpx.Timeout(30, connect=10),
-        follow_redirects=True,
-        headers={"Accept": "text/html", "User-Agent": "DeOlhoNaPolitica/0.1"},
-    )
+    client = client or public_html_client()
     run_id = uuid4()
     started = now()
     try:
