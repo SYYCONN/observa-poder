@@ -195,7 +195,9 @@ def import_camara_staff(engine, year: int, month: int, client=None):
                                         staff_remuneration_url(remuneration_url, year, month)
                                     )
                                     remuneration_response.raise_for_status()
-                                    remuneration = parse_staff_remuneration(remuneration_response.text)
+                                    parsed = parse_staff_remuneration(remuneration_response.text)
+                                    if parsed["payroll_period"] == f"{year}-{month:02d}":
+                                        remuneration = parsed
                                 except httpx.HTTPError:
                                     # O cadastro do assessor continua útil mesmo quando a
                                     # página mensal de remuneração estiver indisponível.

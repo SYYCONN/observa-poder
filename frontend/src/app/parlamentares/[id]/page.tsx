@@ -148,6 +148,7 @@ type StaffPage = {
   offset: number;
   year: number | null;
   month: number | null;
+  periods?: { year: number; month: number }[];
   source: string | null;
   source_url: string | null;
   collected_at: string | null;
@@ -433,10 +434,14 @@ export default function ParliamentarianPage() {
     setShowFinancialSource(true);
     if (!financialExpensesPage) loadFinancialExpenses();
   };
-  const loadStaff = (offset = 0) => {
+  const loadStaff = (offset = 0, year = staffPage?.year, month = staffPage?.month) => {
     setStaffLoading(true);
     setStaffError("");
     const query = new URLSearchParams({ limit: "10", offset: String(offset) });
+    if (year && month) {
+      query.set("year", String(year));
+      query.set("month", String(month));
+    }
     fetch(`${API_URL}/parliamentarians/${params.id}/staff?${query}`)
       .then((response) =>
         response.ok
@@ -1322,6 +1327,38 @@ export default function ParliamentarianPage() {
                     Servidores em exercício na categoria Secretário Parlamentar, conforme a
                     publicação oficial da Câmara. Valores ausentes não são apresentados como zero.
                   </p>
+                  {staffPage?.year && staffPage.month && (
+                    <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
+                      {(staffPage.periods?.length ?? 0) > 1 && (
+                        <label className="flex items-center gap-2">
+                          Competência
+                          <select
+                            className="rounded border border-slate-300 px-2 py-1"
+                            value={`${staffPage.year}-${staffPage.month}`}
+                            disabled={staffLoading}
+                            onChange={(event) => {
+                              const [year, month] = event.target.value.split("-").map(Number);
+                              loadStaff(0, year, month);
+                            }}
+                          >
+                            {staffPage.periods?.map(({ year, month }) => (
+                              <option key={`${year}-${month}`} value={`${year}-${month}`}>
+                                {String(month).padStart(2, "0")}/{year}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {staffPage.source && !staffLoading && (
+                        <a
+                          href={`${API_URL}/parliamentarians/${params.id}/staff.pdf?year=${staffPage.year}&month=${staffPage.month}`}
+                          className="font-semibold text-emerald-800 hover:underline"
+                        >
+                          Baixar PDF desta competência
+                        </a>
+                      )}
+                    </div>
+                  )}
                   {staffPage?.collected_at && (
                     <p className="mt-2 text-xs leading-5 text-slate-500">
                       Fonte: Câmara dos Deputados · coletado em{" "}

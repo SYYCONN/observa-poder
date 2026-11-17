@@ -173,9 +173,18 @@ def upsert_authorships(session, proposition, authors, run_id, seen):
 
 def enrich_known_proposition(session, client, item, run_id, seen):
     external_id = str(item["id"])
-    detail = get_json(client, f"{BASE}/proposicoes/{external_id}").get("dados", {})
+    try:
+        detail = get_json(client, f"{BASE}/proposicoes/{external_id}").get("dados", {})
+        authors = get_json(client, f"{BASE}/proposicoes/{external_id}/autores").get("dados", [])
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 404:
+            raise
+        record(
+            session, run_id, "proposicao_indisponivel", external_id,
+            f"{BASE}/proposicoes/{external_id}", {"status": 404}, seen,
+        )
+        return None
     proposition = upsert_proposition(session, {**item, **detail}, run_id, seen)
-    authors = get_json(client, f"{BASE}/proposicoes/{external_id}/autores").get("dados", [])
     upsert_authorships(session, proposition, authors, run_id, seen)
     return proposition
 
@@ -218,8 +227,12 @@ def import_legislation(engine, limit=LIMIT, backfill_limit=BACKFILL_LIMIT, clien
                 ).get("dados", [])
                 with Session(engine) as session, session.begin():
                     proposition_rows = {}
+                    unavailable = []
                     for item in propositions:
                         row = enrich_known_proposition(session, client, item, run_id, seen)
+                        if row is None:
+                            unavailable.append(str(item["id"]))
+                            continue
                         proposition_rows[str(item["id"])] = row
                         for event in get_json(
                             client, f"{BASE}/proposicoes/{item['id']}/tramitacoes"
@@ -279,7 +292,7 @@ def import_legislation(engine, limit=LIMIT, backfill_limit=BACKFILL_LIMIT, clien
                         .limit(backfill_limit)
                     ).all()
                     for stale in backfill:
-                        proposition_rows[stale.external_id] = enrich_known_proposition(
+                        enriched = enrich_known_proposition(
                             session,
                             client,
                             {
@@ -293,6 +306,10 @@ def import_legislation(engine, limit=LIMIT, backfill_limit=BACKFILL_LIMIT, clien
                             run_id,
                             seen,
                         )
+                        if enriched is None:
+                            unavailable.append(stale.external_id)
+                        else:
+                            proposition_rows[stale.external_id] = enriched
                     for item in votings:
                         vid = str(item["id"])
                         detail = get_json(client, f"{BASE}/votacoes/{vid}").get("dados", {})
@@ -435,6 +452,7 @@ def import_legislation(engine, limit=LIMIT, backfill_limit=BACKFILL_LIMIT, clien
                     "propositions": len(propositions),
                     "propositions_enriched": len(backfill),
                     "votings": len(votings),
+                    "unavailable_propositions": unavailable,
                 }
             except Exception as exc:
                 with Session(engine) as session, session.begin():

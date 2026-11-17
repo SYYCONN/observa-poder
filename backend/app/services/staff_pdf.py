@@ -119,9 +119,15 @@ def build_staff_pdf(person, mandate, staff, staff_members=None) -> bytes:
     )
     story = []
     members = list(staff_members or [])
-    gross_total = _total(member.gross_amount for member in members)
-    net_total = _total(member.net_amount for member in members)
-    allowances_total = _total(member.allowances_amount for member in members)
+    complete_roster = len(members) == staff.staff_count
+    gross_total = _total(member.gross_amount for member in members) if complete_roster else None
+    net_total = _total(member.net_amount for member in members) if complete_roster else None
+    allowances_total = (
+        _total(member.allowances_amount for member in members) if complete_roster else None
+    )
+    gross_coverage = sum(member.gross_amount is not None for member in members)
+    net_coverage = sum(member.net_amount is not None for member in members)
+    allowances_coverage = sum(member.allowances_amount is not None for member in members)
 
     logo = Image(str(LOGO_PATH), width=20 * mm, height=20 * mm) if LOGO_PATH.exists() else Spacer(20 * mm, 20 * mm)
     header = Table(
@@ -184,7 +190,11 @@ def build_staff_pdf(person, mandate, staff, staff_members=None) -> bytes:
     story.append(Paragraph(
         (
             "Este relatório apresenta a composição publicada para o gabinete na competência consultada. "
-            "Os valores são os campos de remuneração divulgados pela Câmara; descontos pessoais que a fonte não divulga podem fazer o valor efetivamente recebido ser menor."
+            "O portal exibe cada total quando o campo está disponível para toda a equipe. "
+            f"Cobertura de {period} entre {staff.staff_count} assessores: "
+            f"{gross_coverage} com remuneração bruta, {net_coverage} com valor após descontos "
+            f"obrigatórios e {allowances_coverage} com auxílios e outros. "
+            "Descontos pessoais que a fonte não divulga podem reduzir o valor efetivamente recebido."
             if members
             else "A consulta nominal desta competência ainda não foi importada; os valores individuais serão exibidos após a próxima coleta completa."
         ),
@@ -197,7 +207,7 @@ def build_staff_pdf(person, mandate, staff, staff_members=None) -> bytes:
             f'Página oficial da equipe: <link href="{CAMARA_STAFF_URL}" color="#007f62">{_text(CAMARA_STAFF_URL)}</link><br/>'
             f"Competência representada: {_text(period)}<br/>"
             f"Coletado pelo portal em: {_text(collected_at)}<br/>"
-            "Os filtros do gabinete são aplicados na consulta do perfil. Os links individuais de remuneração foram consultados na mesma competência.",
+            "Os filtros do gabinete são aplicados na consulta do perfil. A remuneração exibida se refere à competência deste relatório.",
             body_style,
         ),
         Paragraph(

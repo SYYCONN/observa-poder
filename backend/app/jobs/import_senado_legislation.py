@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
 
@@ -147,6 +148,15 @@ def upsert_proposition(session, item: dict, run_id: UUID, seen: datetime):
     row.summary = (
         content.get("ementa") or item.get("ementa") or item.get("Ementa") or label
     ).strip()
+    row.full_text_url = document.get("url") or None
+    row.status_description = detail.get("situacaoAtual") or None
+    row.status_at = parse_date(detail.get("dataSituacaoAtual"))
+    row.official_detail_collected_at = seen if detail else None
+    keywords = document.get("indexacao")
+    row.keywords = (
+        [value.strip() for value in re.split(r"[,;]", keywords) if value.strip()]
+        if isinstance(keywords, str) else None
+    )
     row.presented_at = parse_date(
         document.get("dataApresentacao")
         or item.get("dataApresentacao")

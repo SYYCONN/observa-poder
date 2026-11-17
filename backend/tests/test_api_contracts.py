@@ -1,5 +1,7 @@
 """Contratos HTTP sem rede externa; consultas inválidas não chegam ao banco."""
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -99,6 +101,36 @@ async def test_missing_record_returns_public_404(api, route, detail):
     assert response.status_code == 404
     assert response.json() == {"detail": detail}
     assert db.get.call_args.args[1] == identifier
+
+
+async def test_staff_listing_exposes_periods_for_historical_selection(api):
+    client, db = api
+    db.get.return_value = object()
+    db.scalar.return_value = 0
+    summary = {
+        "year": 2026,
+        "source": "camara",
+        "source_query_url": "https://www.camara.leg.br/",
+        "collected_at": datetime(2026, 11, 17, tzinfo=timezone.utc),
+        "source_record_id": uuid4(),
+    }
+    db.scalars.return_value.all.side_effect = [
+        [SimpleNamespace(month=11, **summary), SimpleNamespace(month=10, **summary)],
+        [],
+    ]
+    response = await client.get(f"/api/v1/parliamentarians/{uuid4()}/staff?year=2026&month=10")
+    assert response.status_code == 200
+    data = response.json()
+    assert (data["year"], data["month"]) == (2026, 10)
+    assert data["periods"] == [{"year": 2026, "month": 11}, {"year": 2026, "month": 10}]
+
+
+async def test_staff_pdf_requires_complete_period(api):
+    client, db = api
+    db.get.return_value = object()
+    response = await client.get(f"/api/v1/parliamentarians/{uuid4()}/staff.pdf?year=2026")
+    assert response.status_code == 400
+    db.scalar.assert_not_called()
 
 
 async def test_empty_parliamentarian_page_preserves_pagination(api):

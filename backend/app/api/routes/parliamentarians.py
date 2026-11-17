@@ -27,6 +27,7 @@ from app.modules.financas.schemas import (
     ParliamentaryExpenseResponse,
     ParliamentaryStaffMemberResponse,
     ParliamentaryStaffPage,
+    ParliamentaryStaffPeriod,
 )
 from app.modules.parlamentares.models import ElectionResult, Mandate, Parliamentarian
 from app.modules.votacoes.models import Vote, Voting
@@ -249,30 +250,22 @@ def list_parliamentarian_staff(
         raise HTTPException(status_code=400, detail="Informe ano e mês da equipe em conjunto.")
 
     selected_year, selected_month = year, month
-    staff_summary = None
-    if selected_year is None:
-        staff_summary = db.scalar(
-            select(ParliamentaryStaffSummary)
-            .where(
-                ParliamentaryStaffSummary.parliamentarian_id == person_id,
-                ParliamentaryStaffSummary.source == "camara",
-            )
-            .order_by(
-                ParliamentaryStaffSummary.year.desc(),
-                ParliamentaryStaffSummary.month.desc(),
-            )
-            .limit(1)
+    staff_summaries = db.scalars(
+        select(ParliamentaryStaffSummary)
+        .where(
+            ParliamentaryStaffSummary.parliamentarian_id == person_id,
+            ParliamentaryStaffSummary.source == "camara",
         )
+        .order_by(ParliamentaryStaffSummary.year.desc(), ParliamentaryStaffSummary.month.desc())
+    ).all()
+    periods = [ParliamentaryStaffPeriod(year=row.year, month=row.month) for row in staff_summaries]
+    if selected_year is None:
+        staff_summary = staff_summaries[0] if staff_summaries else None
         if staff_summary:
             selected_year, selected_month = staff_summary.year, staff_summary.month
     else:
-        staff_summary = db.scalar(
-            select(ParliamentaryStaffSummary).where(
-                ParliamentaryStaffSummary.parliamentarian_id == person_id,
-                ParliamentaryStaffSummary.source == "camara",
-                ParliamentaryStaffSummary.year == selected_year,
-                ParliamentaryStaffSummary.month == selected_month,
-            )
+        staff_summary = next(
+            (row for row in staff_summaries if (row.year, row.month) == (year, month)), None
         )
 
     if selected_year is None or selected_month is None:
@@ -320,6 +313,7 @@ def list_parliamentarian_staff(
         offset=offset,
         year=selected_year,
         month=selected_month,
+        periods=periods,
         source=staff_summary.source if staff_summary else None,
         source_url=staff_summary.source_query_url if staff_summary else None,
         collected_at=staff_summary.collected_at.isoformat() if staff_summary else None,
@@ -577,15 +571,27 @@ def download_parliamentarian_amendments_pdf(
 @router.get("/{person_id}/staff.pdf")
 def download_parliamentarian_staff_pdf(
     person_id: UUID,
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    month: int | None = Query(default=None, ge=1, le=12),
     db: Session = Depends(database_session),
 ):
     person = db.get(Parliamentarian, person_id)
     if person is None:
         raise HTTPException(status_code=404, detail="Parlamentar não encontrado")
+    if (year is None) != (month is None):
+        raise HTTPException(status_code=400, detail="Informe ano e mês da equipe em conjunto.")
+    staff_query = select(ParliamentaryStaffSummary).where(
+        ParliamentaryStaffSummary.parliamentarian_id == person_id,
+        ParliamentaryStaffSummary.source == "camara",
+    )
+    if year is not None:
+        staff_query = staff_query.where(
+            ParliamentaryStaffSummary.year == year, ParliamentaryStaffSummary.month == month
+        )
     staff = db.scalar(
-        select(ParliamentaryStaffSummary)
-        .where(ParliamentaryStaffSummary.parliamentarian_id == person_id)
-        .order_by(ParliamentaryStaffSummary.year.desc(), ParliamentaryStaffSummary.month.desc())
+        staff_query.order_by(
+            ParliamentaryStaffSummary.year.desc(), ParliamentaryStaffSummary.month.desc()
+        ).limit(1)
     )
     if staff is None:
         raise HTTPException(status_code=404, detail="Não há equipe coletada para este parlamentar")

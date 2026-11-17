@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class FinancialSummaryResponse(BaseModel):
@@ -90,6 +90,11 @@ class ParliamentaryStaffMemberResponse(BaseModel):
     source_record_id: str
 
 
+class ParliamentaryStaffPeriod(BaseModel):
+    year: int
+    month: int
+
+
 class ParliamentaryStaffPage(BaseModel):
     items: list[ParliamentaryStaffMemberResponse]
     total: int
@@ -97,6 +102,7 @@ class ParliamentaryStaffPage(BaseModel):
     offset: int
     year: int | None
     month: int | None
+    periods: list[ParliamentaryStaffPeriod] = Field(default_factory=list)
     source: str | None = None
     source_url: str | None = None
     collected_at: str | None = None
