@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
+import { VotingGuide } from "@/components/voting-guide";
 import { FilterSelect } from "@/components/filter-select";
 import { LegislationPagination } from "@/components/legislation-pagination";
 import { SiteFooter, SiteHeader } from "@/components/site-header";
@@ -168,6 +169,8 @@ export default function VotacoesPage() {
             ))}
           </div>
         </div>
+
+        <VotingGuide />
 
         <Card className="mt-6 p-5 shadow-sm sm:p-6">
           <form

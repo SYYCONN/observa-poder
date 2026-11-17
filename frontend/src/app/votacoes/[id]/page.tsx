@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { VotingGuide } from "@/components/voting-guide";
 import { RecordProvenance } from "@/components/record-provenance";
 import { SiteFooter, SiteHeader } from "@/components/site-header";
 type Detail = {
@@ -109,7 +110,10 @@ export default function VotingPage() {
           <>
             <header className="mt-6 rounded-[2rem] bg-[#07152d] p-7 text-white shadow-xl shadow-slate-900/10 sm:p-10">
               <p className="text-sm font-bold tracking-[0.16em] text-emerald-300">
-                Votação · {item.occurred_on ?? "data não informada"}
+                Votação ·{" "}
+                {item.occurred_on
+                  ? new Date(`${item.occurred_on}T12:00:00`).toLocaleDateString("pt-BR")
+                  : "data não informada"}
               </p>
               <h1 className="mt-4 max-w-4xl text-2xl font-bold leading-snug tracking-tight sm:text-5xl sm:leading-tight">
                 {item.object_description || item.description}
@@ -125,7 +129,7 @@ export default function VotingPage() {
               <div className="mt-6 inline-flex rounded-full bg-white/10 px-4 py-2 text-sm font-bold text-slate-100">
                 {item.mode === "nominal"
                   ? "Modalidade: votação nominal"
-                  : "Modalidade não identificada"}
+                  : "Modalidade não informada na coleta"}
               </div>
               <RecordProvenance
                 source={item.source}
@@ -141,18 +145,21 @@ export default function VotingPage() {
                 Consultar fonte oficial ↗
               </a>
             </header>
+            <VotingGuide />
             <section className="mt-6 grid gap-4 sm:grid-cols-2">
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6">
                 <p className="text-sm font-extrabold uppercase tracking-widest text-emerald-800">
                   Como foi votado
                 </p>
                 <h2 className="mt-2 text-xl font-extrabold text-slate-950">
-                  {item.mode === "nominal" ? "Votação nominal" : "Modalidade não identificada"}
+                  {item.mode === "nominal"
+                    ? "Votação nominal"
+                    : "Modalidade não informada na coleta"}
                 </h2>
                 <p className="mt-3 leading-7 text-slate-700">
                   {item.mode === "nominal"
                     ? "Na votação nominal, a fonte registra a posição individual de cada parlamentar. A lista abaixo contém somente os votos efetivamente publicados e importados."
-                    : "A fonte importada não identificou esta votação como nominal. Sem essa informação, a plataforma não presume como cada parlamentar votou."}
+                    : "A modalidade não foi identificada nos dados coletados. Não é possível concluir, só por essa ausência, se a votação foi simbólica ou como cada parlamentar votou."}
                 </p>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white p-6">
@@ -195,119 +202,184 @@ export default function VotingPage() {
                   <h2 className="mt-2 text-2xl font-bold">Votos publicados</h2>
                 </div>
                 <p className="text-sm text-slate-500">
-                  {item.votes.length} {item.votes.length === 1 ? "registro" : "registros"}
+                  {item.votes.length
+                    ? `${item.votes.length} ${item.votes.length === 1 ? "registro" : "registros"}`
+                    : "Sem registros individuais disponíveis"}
                 </p>
               </div>
-              <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-xl bg-emerald-50 p-4">
-                  <p className="text-sm text-emerald-800">Sim</p>
-                  <p className="mt-1 text-3xl font-extrabold text-emerald-900">{voteSummary.yes}</p>
-                </div>
-                <div className="rounded-xl bg-red-50 p-4">
-                  <p className="text-sm text-red-800">Não</p>
-                  <p className="mt-1 text-3xl font-extrabold text-red-900">{voteSummary.no}</p>
-                </div>
-                <div className="rounded-xl bg-slate-100 p-4">
-                  <p className="text-sm text-slate-600">Outros</p>
-                  <p className="mt-1 text-3xl font-extrabold text-slate-900">{voteSummary.other}</p>
-                </div>
-              </div>
-              {partyChart.length > 0 && (
-                <div className="mt-8 border-t border-slate-100 pt-7">
-                  <div className="mb-4">
-                    <h3 className="text-lg font-bold text-slate-950">Distribuição por partido</h3>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Totais entre os votos nominais publicados para esta votação.
-                    </p>
+              {item.votes.length > 0 && (
+                <>
+                  <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-xl bg-emerald-50 p-4">
+                      <p className="text-sm text-emerald-800">Sim</p>
+                      <p className="mt-1 text-3xl font-extrabold text-emerald-900">
+                        {voteSummary.yes}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-red-50 p-4">
+                      <p className="text-sm text-red-800">Não</p>
+                      <p className="mt-1 text-3xl font-extrabold text-red-900">{voteSummary.no}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-100 p-4">
+                      <p className="text-sm text-slate-600">Outros</p>
+                      <p className="mt-1 text-3xl font-extrabold text-slate-900">
+                        {voteSummary.other}
+                      </p>
+                    </div>
                   </div>
-                  <div className="h-64 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={partyChart}
-                        margin={{ top: 8, right: 8, left: -20, bottom: 0 }}
+                  {partyChart.length > 0 && (
+                    <div className="mt-8 border-t border-slate-100 pt-7">
+                      <div className="mb-4">
+                        <h3 className="text-lg font-bold text-slate-950">
+                          Distribuição por partido
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Cada barra representa um partido; a altura indica a quantidade de
+                          registros individuais coletados. As cores mostram as posições, não uma
+                          orientação oficial do partido.
+                        </p>
+                      </div>
+                      <ul
+                        className="mb-4 flex flex-wrap gap-x-5 gap-y-2 text-sm text-slate-700"
+                        aria-label="Legenda do gráfico"
                       >
-                        <CartesianGrid stroke="#e2e8f0" vertical={false} />
-                        <XAxis
-                          dataKey="party"
-                          tick={{ fontSize: 11 }}
-                          tickLine={false}
-                          axisLine={false}
-                        />
-                        <YAxis
-                          allowDecimals={false}
-                          tick={{ fontSize: 11 }}
-                          tickLine={false}
-                          axisLine={false}
-                        />
-                        <Tooltip cursor={{ fill: "#f1f5f9" }} />
-                        <Bar dataKey="Sim" stackId="votes" fill="#087f63" radius={[3, 3, 0, 0]} />
-                        <Bar dataKey="Não" stackId="votes" fill="#c45a5a" />
-                        <Bar dataKey="Outros" stackId="votes" fill="#94a3b8" />
-                      </BarChart>
-                    </ResponsiveContainer>
+                        <li>
+                          <span
+                            aria-hidden="true"
+                            className="mr-2 inline-block h-3 w-3 rounded bg-[#087f63]"
+                          />
+                          Sim: posição favorável ao objeto votado
+                        </li>
+                        <li>
+                          <span
+                            aria-hidden="true"
+                            className="mr-2 inline-block h-3 w-3 rounded bg-[#c45a5a]"
+                          />
+                          Não: posição contrária ao objeto votado
+                        </li>
+                        <li>
+                          <span
+                            aria-hidden="true"
+                            className="mr-2 inline-block h-3 w-3 rounded bg-[#94a3b8]"
+                          />
+                          Outros: demais posições registradas
+                        </li>
+                      </ul>
+                      <p className="mb-4 text-sm text-slate-600">
+                        Eixo horizontal: partido na data do voto. Eixo vertical: número de
+                        registros. A tabela abaixo oferece os mesmos totais em texto.
+                      </p>
+                      <div className="h-64 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart
+                            data={partyChart}
+                            margin={{ top: 8, right: 8, left: -20, bottom: 0 }}
+                          >
+                            <CartesianGrid stroke="#e2e8f0" vertical={false} />
+                            <XAxis
+                              dataKey="party"
+                              tick={{ fontSize: 11 }}
+                              tickLine={false}
+                              axisLine={false}
+                            />
+                            <YAxis
+                              allowDecimals={false}
+                              tick={{ fontSize: 11 }}
+                              tickLine={false}
+                              axisLine={false}
+                            />
+                            <Tooltip cursor={{ fill: "#f1f5f9" }} />
+                            <Bar
+                              dataKey="Sim"
+                              stackId="votes"
+                              fill="#087f63"
+                              radius={[3, 3, 0, 0]}
+                            />
+                            <Bar dataKey="Não" stackId="votes" fill="#c45a5a" />
+                            <Bar dataKey="Outros" stackId="votes" fill="#94a3b8" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-7 grid gap-4 border-t border-slate-100 pt-6 sm:grid-cols-[1fr_auto] sm:items-end">
+                    <label>
+                      <span className="mb-2 block text-sm font-bold text-slate-800">
+                        Buscar parlamentar, partido ou UF
+                      </span>
+                      <input
+                        type="search"
+                        value={voteSearch}
+                        onChange={(event) => setVoteSearch(event.target.value)}
+                        placeholder="Ex.: Maria, PT ou SP"
+                        className="min-h-11 w-full rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </label>
+                    <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar votos">
+                      {(
+                        [
+                          ["todos", "Todos"],
+                          ["sim", "Sim"],
+                          ["nao", "Não"],
+                          ["outros", "Outros"],
+                        ] as const
+                      ).map(([option, label]) => (
+                        <button
+                          key={option}
+                          onClick={() => setFilter(option)}
+                          className={`rounded-full px-4 py-2 text-sm font-semibold ${filter === option ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                  <div className="mt-8 overflow-x-auto">
+                    <h3 className="mb-3 text-lg font-bold">Totais por partido</h3>
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr className="border-b text-slate-500">
+                          <th className="px-3 py-2">Partido</th>
+                          <th className="px-3 py-2">Sim</th>
+                          <th className="px-3 py-2">Não</th>
+                          <th className="px-3 py-2">Outros</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {voteSummary.parties.map(([party, values]) => (
+                          <tr key={party} className="border-b last:border-0">
+                            <td className="px-3 py-2 font-semibold">{party}</td>
+                            <td className="px-3 py-2 text-emerald-700">{values.yes}</td>
+                            <td className="px-3 py-2 text-red-700">{values.no}</td>
+                            <td className="px-3 py-2 text-slate-500">{values.other}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
-              <div className="mt-7 grid gap-4 border-t border-slate-100 pt-6 sm:grid-cols-[1fr_auto] sm:items-end">
-                <label>
-                  <span className="mb-2 block text-sm font-bold text-slate-800">
-                    Buscar parlamentar, partido ou UF
-                  </span>
-                  <input
-                    type="search"
-                    value={voteSearch}
-                    onChange={(event) => setVoteSearch(event.target.value)}
-                    placeholder="Ex.: Maria, PT ou SP"
-                    className="min-h-11 w-full rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-100"
-                  />
-                </label>
-                <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar votos">
-                  {(
-                    [
-                      ["todos", "Todos"],
-                      ["sim", "Sim"],
-                      ["nao", "Não"],
-                      ["outros", "Outros"],
-                    ] as const
-                  ).map(([option, label]) => (
-                    <button
-                      key={option}
-                      onClick={() => setFilter(option)}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold ${filter === option ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="mt-8 overflow-x-auto">
-                <h3 className="mb-3 text-lg font-bold">Totais por partido</h3>
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b text-slate-500">
-                      <th className="px-3 py-2">Partido</th>
-                      <th className="px-3 py-2">Sim</th>
-                      <th className="px-3 py-2">Não</th>
-                      <th className="px-3 py-2">Outros</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {voteSummary.parties.map(([party, values]) => (
-                      <tr key={party} className="border-b last:border-0">
-                        <td className="px-3 py-2 font-semibold">{party}</td>
-                        <td className="px-3 py-2 text-emerald-700">{values.yes}</td>
-                        <td className="px-3 py-2 text-red-700">{values.no}</td>
-                        <td className="px-3 py-2 text-slate-500">{values.other}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
               {item.votes.length === 0 ? (
-                <p className="mt-5 text-sm text-slate-500">
-                  Nenhum voto individual foi importado para esta votação. Consulte a fonte oficial
-                  para verificar os registros disponíveis.
-                </p>
+                <div className="mt-5 rounded-xl bg-slate-50 p-5 text-sm leading-7 text-slate-700">
+                  <h3 className="font-bold text-slate-950">Sem votos individuais nesta coleta</h3>
+                  <p>
+                    O resultado geral e os votos individuais são informações distintas. Não há
+                    registros individuais incorporados para esta votação. Isso pode decorrer do que
+                    a fonte disponibiliza ou de uma lacuna da coleta.
+                  </p>
+                  <p className="mt-2">
+                    Não mostramos um placar de zeros: não é possível concluir quem votou, quem
+                    faltou ou se houve unanimidade.
+                  </p>
+                  <a
+                    className="mt-3 inline-block font-semibold text-emerald-800 underline"
+                    href={item.source_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Verificar esta votação na fonte oficial ↗
+                  </a>
+                </div>
               ) : (
                 <div className="mt-5 overflow-x-auto">
                   <table className="w-full text-left text-sm">
