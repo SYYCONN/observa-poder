@@ -24,7 +24,12 @@ function modeLabel(mode: string | null) {
 }
 
 function votingTitle(item: Voting) {
-  return item.object_description?.trim() || item.description?.trim() || "Votação sem descrição";
+  return (
+    item.display_title?.trim() ||
+    item.object_description?.trim() ||
+    item.description?.trim() ||
+    "Votação com objeto ainda não identificado"
+  );
 }
 
 function recordsLabel(total: number) {
@@ -319,6 +324,11 @@ export default function VotacoesPage() {
                   <h3 className="mt-5 line-clamp-4 text-lg font-bold leading-7 text-slate-950">
                     {votingTitle(item)}
                   </h3>
+                  {item.decision_context && (
+                    <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-600">
+                      {item.decision_context}
+                    </p>
+                  )}
                   <p className="mt-3 text-sm font-semibold text-slate-500">
                     {modeLabel(item.mode)}
                   </p>

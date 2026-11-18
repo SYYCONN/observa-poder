@@ -9,6 +9,8 @@ import { SiteFooter, SiteHeader } from "@/components/site-header";
 type Detail = {
   occurred_on: string | null;
   description: string;
+  display_title?: string | null;
+  decision_context?: string | null;
   object_description: string | null;
   approved: boolean | null;
   mode: string | null;
@@ -116,8 +118,22 @@ export default function VotingPage() {
                   : "data não informada"}
               </p>
               <h1 className="mt-4 max-w-4xl text-2xl font-bold leading-snug tracking-tight sm:text-5xl sm:leading-tight">
-                {item.object_description || item.description}
+                {item.display_title || item.object_description || item.description}
               </h1>
+              {item.decision_context && (
+                <p className="mt-5 max-w-4xl text-lg leading-8 text-slate-200">
+                  {item.decision_context}
+                </p>
+              )}
+              <details className="mt-5 text-sm text-slate-300">
+                <summary className="cursor-pointer font-semibold">
+                  Texto original publicado pela fonte
+                </summary>
+                <p className="mt-2 leading-6">{item.description}</p>
+                {item.object_description && item.object_description !== item.description && (
+                  <p className="mt-2 leading-6">{item.object_description}</p>
+                )}
+              </details>
               <p className="mt-5 text-slate-300">
                 Resultado registrado:{" "}
                 {item.approved === true

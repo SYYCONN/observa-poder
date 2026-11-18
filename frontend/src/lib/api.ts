@@ -34,6 +34,9 @@ export type Voting = {
   external_id: string;
   occurred_on: string | null;
   description: string;
+  display_title?: string | null;
+  decision_context?: string | null;
+  subject_status?: string;
   object_description: string | null;
   approved: boolean | null;
   mode: string | null;

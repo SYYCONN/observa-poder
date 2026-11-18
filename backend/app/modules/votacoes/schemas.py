@@ -15,6 +15,9 @@ class VotingSummary(BaseModel):
     source_url: str
     source: str
     collected_at: str
+    display_title: str | None = None
+    decision_context: str | None = None
+    subject_status: str = "unknown"
 
 
 class VotingFacets(BaseModel):

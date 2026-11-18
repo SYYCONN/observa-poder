@@ -6,6 +6,7 @@ from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import database_session
+from app.services.voting_presentation import describe_voting, voting_presentations
 from app.modules.proposicoes.models import (
     Authorship,
     ProceedingsEvent,
@@ -64,8 +65,9 @@ def proposition_summary(row: Proposition) -> PropositionSummary:
     )
 
 
-def voting_summary(row: Voting) -> VotingSummary:
+def voting_summary(row: Voting, presentation: dict | None = None) -> VotingSummary:
     return VotingSummary(
+        **(presentation or describe_voting(row)),
         id=row.id,
         external_id=row.external_id,
         occurred_on=row.occurred_on,
@@ -169,7 +171,8 @@ def list_votings(
         .offset(offset)
         .limit(limit)
     ).all()
-    return [voting_summary(row) for row in rows]
+    presentations = voting_presentations(db, rows)
+    return [voting_summary(row, presentations[row.id]) for row in rows]
 
 
 @router.get("/votings/search", response_model=VotingPage)
@@ -228,8 +231,9 @@ def search_votings(
         .distinct()
         .order_by(Voting.mode)
     ).all()
+    presentations = voting_presentations(db, rows)
     return VotingPage(
-        items=[voting_summary(row) for row in rows],
+        items=[voting_summary(row, presentations[row.id]) for row in rows],
         total=total,
         limit=limit,
         offset=offset,
@@ -390,6 +394,7 @@ def get_voting(voting_id: UUID, db: Session = Depends(database_session)):
         )
     vote_rows = db.execute(vote_query.order_by(Parliamentarian.name)).all()
     return VotingDetail(
+        **describe_voting(row, [(relation.relation_type, prop) for relation, prop in relation_rows]),
         id=row.id,
         external_id=row.external_id,
         occurred_on=row.occurred_on,
