@@ -253,6 +253,116 @@ def upsert_proposition(session, item: dict, run_id: UUID, seen: datetime):
     return row
 
 
+def upsert_voting(session, client, item, run_id, seen, voting_year, propositions=None, coverage=None):
+    coverage = coverage if coverage is not None else {}
+    coverage.update(published=0, matched=0, missing_parliamentarians=0, unrecognized_positions=0)
+    propositions = propositions or {}
+    code = item.get("CodigoVotacaoSve") or item.get("CodigoSessaoVotacao")
+    if not code:
+        return None
+    voting_id = str(code)
+    record = source_record(
+        session,
+        run_id,
+        "votacao",
+        voting_id,
+        f"{BASE}/plenario/votacao/nominal/{voting_year}",
+        item,
+        seen,
+    )
+    row = session.scalar(
+        select(Voting).where(
+            Voting.source == SOURCE, Voting.external_id == voting_id
+        )
+    )
+    if row is None:
+        row = Voting(source=SOURCE, external_id=voting_id)
+        session.add(row)
+    row.occurred_on = (
+        date.fromisoformat(item["DataSessao"])
+        if item.get("DataSessao")
+        else None
+    )
+    row.description = item.get("DescricaoVotacao") or ""
+    row.object_description = item.get("DescricaoIdentificacaoMateria")
+    row.approved = {"A": True, "R": False}.get(item.get("Resultado"))
+    row.mode, row.source_url, row.collected_at, row.source_record_id = (
+        "nominal",
+        record.source_url,
+        seen,
+        record.id,
+    )
+    session.flush()
+    pid = str(item.get("CodigoMateria"))
+    prop = propositions.get(pid) or session.scalar(
+        select(Proposition).where(
+            Proposition.source == SOURCE, Proposition.external_id == pid
+        )
+    )
+    if prop is None and item.get("CodigoMateria"):
+        placeholder = {
+            "codigoMateria": pid,
+            "siglaSubtipoMateria": item.get("SiglaMateria"),
+            "numeroMateria": item.get("NumeroMateria"),
+            "anoMateria": item.get("AnoMateria"),
+            "identificacao": item.get("DescricaoIdentificacaoMateria"),
+        }
+        prop = upsert_proposition(
+            session, enrich_proposition(client, placeholder), run_id, seen
+        )
+    if (
+        prop
+        and session.get(VotingProposition, (row.id, prop.id, "object")) is None
+    ):
+        session.add(
+            VotingProposition(
+                voting_id=row.id,
+                proposition_id=prop.id,
+                relation_type="object",
+                source=SOURCE,
+                source_url=record.source_url,
+                collected_at=seen,
+                source_record_id=record.id,
+            )
+        )
+    for vote in _as_list((item.get("Votos") or {}).get("VotoParlamentar")):
+        coverage["published"] += 1
+        position = vote_position(vote.get("Voto"), vote.get("DescricaoVoto"))
+        if position is None:
+            coverage["unrecognized_positions"] += 1
+            continue
+        person = session.scalar(
+            select(Parliamentarian).where(
+                Parliamentarian.source == SOURCE,
+                Parliamentarian.external_id
+                == str(vote.get("CodigoParlamentar")),
+            )
+        )
+        if person is None:
+            coverage["missing_parliamentarians"] += 1
+            continue
+        coverage["matched"] += 1
+        existing = session.scalar(
+            select(Vote).where(
+                Vote.voting_id == row.id, Vote.parliamentarian_id == person.id
+            )
+        )
+        if existing is None:
+            existing = Vote(voting_id=row.id, parliamentarian_id=person.id)
+            session.add(existing)
+        existing.position = position
+        existing.party_at_vote, existing.state_at_vote = vote.get(
+            "SiglaPartido"
+        ), vote.get("SiglaUF")
+        (
+            existing.source,
+            existing.source_url,
+            existing.collected_at,
+            existing.source_record_id,
+        ) = (SOURCE, record.source_url, seen, record.id)
+    return row
+
+
 def import_senado_legislation(engine, client=None):
     owns = client is None
     client = client or httpx.Client(
@@ -322,105 +432,7 @@ def import_senado_legislation(engine, client=None):
                                 session, enriched, run_id, seen
                             )
                     for item in votings:
-                        code = item.get("CodigoVotacaoSve") or item.get("CodigoSessaoVotacao")
-                        if not code:
-                            continue
-                        voting_id = str(code)
-                        record = source_record(
-                            session,
-                            run_id,
-                            "votacao",
-                            voting_id,
-                            f"{BASE}/plenario/votacao/nominal/{voting_year}",
-                            item,
-                            seen,
-                        )
-                        row = session.scalar(
-                            select(Voting).where(
-                                Voting.source == SOURCE, Voting.external_id == voting_id
-                            )
-                        )
-                        if row is None:
-                            row = Voting(source=SOURCE, external_id=voting_id)
-                            session.add(row)
-                        row.occurred_on = (
-                            date.fromisoformat(item["DataSessao"])
-                            if item.get("DataSessao")
-                            else None
-                        )
-                        row.description = item.get("DescricaoVotacao") or ""
-                        row.object_description = item.get("DescricaoIdentificacaoMateria")
-                        row.approved = {"A": True, "R": False}.get(item.get("Resultado"))
-                        row.mode, row.source_url, row.collected_at, row.source_record_id = (
-                            "nominal",
-                            record.source_url,
-                            seen,
-                            record.id,
-                        )
-                        session.flush()
-                        pid = str(item.get("CodigoMateria"))
-                        prop = propositions.get(pid) or session.scalar(
-                            select(Proposition).where(
-                                Proposition.source == SOURCE, Proposition.external_id == pid
-                            )
-                        )
-                        if prop is None and item.get("CodigoMateria"):
-                            placeholder = {
-                                "codigoMateria": pid,
-                                "siglaSubtipoMateria": item.get("SiglaMateria"),
-                                "numeroMateria": item.get("NumeroMateria"),
-                                "anoMateria": item.get("AnoMateria"),
-                                "identificacao": item.get("DescricaoIdentificacaoMateria"),
-                            }
-                            prop = upsert_proposition(
-                                session, enrich_proposition(client, placeholder), run_id, seen
-                            )
-                        if (
-                            prop
-                            and session.get(VotingProposition, (row.id, prop.id, "object")) is None
-                        ):
-                            session.add(
-                                VotingProposition(
-                                    voting_id=row.id,
-                                    proposition_id=prop.id,
-                                    relation_type="object",
-                                    source=SOURCE,
-                                    source_url=record.source_url,
-                                    collected_at=seen,
-                                    source_record_id=record.id,
-                                )
-                            )
-                        for vote in _as_list((item.get("Votos") or {}).get("VotoParlamentar")):
-                            position = vote_position(vote.get("Voto"), vote.get("DescricaoVoto"))
-                            if position is None:
-                                continue
-                            person = session.scalar(
-                                select(Parliamentarian).where(
-                                    Parliamentarian.source == SOURCE,
-                                    Parliamentarian.external_id
-                                    == str(vote.get("CodigoParlamentar")),
-                                )
-                            )
-                            if person is None:
-                                continue
-                            existing = session.scalar(
-                                select(Vote).where(
-                                    Vote.voting_id == row.id, Vote.parliamentarian_id == person.id
-                                )
-                            )
-                            if existing is None:
-                                existing = Vote(voting_id=row.id, parliamentarian_id=person.id)
-                                session.add(existing)
-                            existing.position = position
-                            existing.party_at_vote, existing.state_at_vote = vote.get(
-                                "SiglaPartido"
-                            ), vote.get("SiglaUF")
-                            (
-                                existing.source,
-                                existing.source_url,
-                                existing.collected_at,
-                                existing.source_record_id,
-                            ) = (SOURCE, record.source_url, seen, record.id)
+                        upsert_voting(session, client, item, run_id, seen, voting_year, propositions)
                     run = session.get(ImportRun, run_id)
                     run.status, run.finished_at, run.received, run.inserted = (
                         "success",

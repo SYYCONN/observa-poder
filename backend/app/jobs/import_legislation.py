@@ -189,6 +189,146 @@ def enrich_known_proposition(session, client, item, run_id, seen):
     return proposition
 
 
+def upsert_voting(session, client, item, run_id, seen, proposition_rows=None, coverage=None):
+    coverage = coverage if coverage is not None else {}
+    coverage.update(published=0, matched=0, missing_parliamentarians=0, unrecognized_positions=0)
+    proposition_rows = proposition_rows or {}
+    vid = str(item["id"])
+    detail = get_json(client, f"{BASE}/votacoes/{vid}").get("dados", {})
+    vr = record(
+        session,
+        run_id,
+        "votacao",
+        vid,
+        item.get("uri") or f"{BASE}/votacoes/{vid}",
+        detail or item,
+        seen,
+    )
+    row = session.scalar(
+        select(Voting).where(
+            Voting.source == "camara", Voting.external_id == vid
+        )
+    )
+    if row is None:
+        row = Voting(source="camara", external_id=vid)
+        session.add(row)
+    row.occurred_on = dt(item.get("data")).date() if item.get("data") else None
+    row.registered_at = dt(item.get("dataHoraRegistro"))
+    row.description = detail.get("descricao") or item.get("descricao") or ""
+    row.object_description = detail.get("descUltimaAberturaVotacao")
+    row.agency_url = item.get("uriOrgao")
+    row.approved = camara_boolean(item.get("aprovacao"))
+    row.source_url, row.collected_at, row.source_record_id = (
+        item.get("uri") or f"{BASE}/votacoes/{vid}",
+        seen,
+        vr.id,
+    )
+    session.flush()
+    objects = [{**obj, "_relation": "possible_object"} for obj in detail.get("objetosPossiveis", [])]
+    objects += [{**obj, "_relation": "affected"} for obj in detail.get("proposicoesAfetadas", [])]
+    if detail.get("ultimaApresentacaoProposicao", {}).get(
+        "uriProposicaoCitada"
+    ):
+        objects.append(
+            {
+                "uri": detail["ultimaApresentacaoProposicao"][
+                    "uriProposicaoCitada"
+                ]
+            }
+        )
+    for obj in objects:
+        pid = str(
+            obj.get("id") or obj.get("uri", "").rstrip("/").split("/")[-1]
+        )
+        if not pid.isdigit():
+            continue
+        prop = proposition_rows.get(pid) or session.scalar(
+            select(Proposition).where(
+                Proposition.source == "camara", Proposition.external_id == pid
+            )
+        )
+        if prop is None and obj.get("siglaTipo"):
+            prop = upsert_proposition(
+                session,
+                {
+                    "id": int(pid),
+                    "uri": obj.get("uri") or f"{BASE}/proposicoes/{pid}",
+                    "siglaTipo": obj.get("siglaTipo"),
+                    "numero": obj.get("numero"),
+                    "ano": obj.get("ano"),
+                    "ementa": obj.get("ementa") or "",
+                    "dataApresentacao": obj.get("dataApresentacao"),
+                },
+                run_id,
+                seen,
+            )
+        if prop is None:
+            continue
+        relation = (
+            "affected" if obj.get("_relation") == "affected" else "object"
+            if obj.get("id") == item.get("proposicaoObjeto")
+            else "possible_object"
+        )
+        exists = session.get(VotingProposition, (row.id, prop.id, relation))
+        if exists is None:
+            session.add(
+                VotingProposition(
+                    voting_id=row.id,
+                    proposition_id=prop.id,
+                    relation_type=relation,
+                    source="camara",
+                    source_url=vr.source_url,
+                    collected_at=seen,
+                    source_record_id=vr.id,
+                )
+            )
+    for vote in get_json(client, f"{BASE}/votacoes/{vid}/votos").get(
+        "dados", []
+    ):
+        coverage["published"] += 1
+        position = vote_position(vote.get("voto"), vote.get("tipoVoto"))
+        if position is None:
+            coverage["unrecognized_positions"] += 1
+            continue
+        row.mode = "nominal"
+        person = session.scalar(
+            select(Parliamentarian).where(
+                Parliamentarian.source == "camara",
+                Parliamentarian.external_id
+                == str(
+                    vote.get("deputado_", {}).get("id")
+                    or vote.get("deputado", {}).get("id")
+                ),
+            )
+        )
+        if not person:
+            coverage["missing_parliamentarians"] += 1
+            continue
+        coverage["matched"] += 1
+        existing = session.scalar(
+            select(Vote).where(
+                Vote.voting_id == row.id, Vote.parliamentarian_id == person.id
+            )
+        )
+        if existing is None:
+            existing = Vote(voting_id=row.id, parliamentarian_id=person.id)
+            session.add(existing)
+        existing.position = position
+        existing.party_at_vote = vote.get("deputado_", {}).get(
+            "siglaPartido"
+        ) or vote.get("deputado", {}).get("siglaPartido")
+        existing.state_at_vote = vote.get("deputado_", {}).get(
+            "siglaUf"
+        ) or vote.get("deputado", {}).get("siglaUf")
+        (
+            existing.source,
+            existing.source_url,
+            existing.collected_at,
+            existing.source_record_id,
+        ) = ("camara", vr.source_url, seen, vr.id)
+    return row
+
+
 def import_legislation(engine, limit=LIMIT, backfill_limit=BACKFILL_LIMIT, client=None):
     owns = client is None
     client = client or httpx.Client(
@@ -311,134 +451,7 @@ def import_legislation(engine, limit=LIMIT, backfill_limit=BACKFILL_LIMIT, clien
                         else:
                             proposition_rows[stale.external_id] = enriched
                     for item in votings:
-                        vid = str(item["id"])
-                        detail = get_json(client, f"{BASE}/votacoes/{vid}").get("dados", {})
-                        vr = record(
-                            session,
-                            run_id,
-                            "votacao",
-                            vid,
-                            item.get("uri") or f"{BASE}/votacoes/{vid}",
-                            detail or item,
-                            seen,
-                        )
-                        row = session.scalar(
-                            select(Voting).where(
-                                Voting.source == "camara", Voting.external_id == vid
-                            )
-                        )
-                        if row is None:
-                            row = Voting(source="camara", external_id=vid)
-                            session.add(row)
-                        row.occurred_on = dt(item.get("data")).date() if item.get("data") else None
-                        row.registered_at = dt(item.get("dataHoraRegistro"))
-                        row.description = item.get("descricao") or ""
-                        row.object_description = detail.get("descUltimaAberturaVotacao")
-                        row.agency_url = item.get("uriOrgao")
-                        row.approved = camara_boolean(item.get("aprovacao"))
-                        row.source_url, row.collected_at, row.source_record_id = (
-                            item.get("uri") or f"{BASE}/votacoes/{vid}",
-                            seen,
-                            vr.id,
-                        )
-                        session.flush()
-                        objects = detail.get("objetosPossiveis", [])
-                        if detail.get("ultimaApresentacaoProposicao", {}).get(
-                            "uriProposicaoCitada"
-                        ):
-                            objects.append(
-                                {
-                                    "uri": detail["ultimaApresentacaoProposicao"][
-                                        "uriProposicaoCitada"
-                                    ]
-                                }
-                            )
-                        for obj in objects:
-                            pid = str(
-                                obj.get("id") or obj.get("uri", "").rstrip("/").split("/")[-1]
-                            )
-                            if not pid.isdigit():
-                                continue
-                            prop = proposition_rows.get(pid) or session.scalar(
-                                select(Proposition).where(
-                                    Proposition.source == "camara", Proposition.external_id == pid
-                                )
-                            )
-                            if prop is None and obj.get("siglaTipo"):
-                                prop = upsert_proposition(
-                                    session,
-                                    {
-                                        "id": int(pid),
-                                        "uri": obj.get("uri") or f"{BASE}/proposicoes/{pid}",
-                                        "siglaTipo": obj.get("siglaTipo"),
-                                        "numero": obj.get("numero"),
-                                        "ano": obj.get("ano"),
-                                        "ementa": obj.get("ementa") or "",
-                                        "dataApresentacao": obj.get("dataApresentacao"),
-                                    },
-                                    run_id,
-                                    seen,
-                                )
-                            if prop is None:
-                                continue
-                            relation = (
-                                "object"
-                                if obj.get("id") == item.get("proposicaoObjeto")
-                                else "possible_object"
-                            )
-                            exists = session.get(VotingProposition, (row.id, prop.id, relation))
-                            if exists is None:
-                                session.add(
-                                    VotingProposition(
-                                        voting_id=row.id,
-                                        proposition_id=prop.id,
-                                        relation_type=relation,
-                                        source="camara",
-                                        source_url=vr.source_url,
-                                        collected_at=seen,
-                                        source_record_id=vr.id,
-                                    )
-                                )
-                        for vote in get_json(client, f"{BASE}/votacoes/{vid}/votos").get(
-                            "dados", []
-                        ):
-                            position = vote_position(vote.get("voto"), vote.get("tipoVoto"))
-                            if position is None:
-                                continue
-                            row.mode = "nominal"
-                            person = session.scalar(
-                                select(Parliamentarian).where(
-                                    Parliamentarian.source == "camara",
-                                    Parliamentarian.external_id
-                                    == str(
-                                        vote.get("deputado_", {}).get("id")
-                                        or vote.get("deputado", {}).get("id")
-                                    ),
-                                )
-                            )
-                            if not person:
-                                continue
-                            existing = session.scalar(
-                                select(Vote).where(
-                                    Vote.voting_id == row.id, Vote.parliamentarian_id == person.id
-                                )
-                            )
-                            if existing is None:
-                                existing = Vote(voting_id=row.id, parliamentarian_id=person.id)
-                                session.add(existing)
-                            existing.position = position
-                            existing.party_at_vote = vote.get("deputado_", {}).get(
-                                "siglaPartido"
-                            ) or vote.get("deputado", {}).get("siglaPartido")
-                            existing.state_at_vote = vote.get("deputado_", {}).get(
-                                "siglaUf"
-                            ) or vote.get("deputado", {}).get("siglaUf")
-                            (
-                                existing.source,
-                                existing.source_url,
-                                existing.collected_at,
-                                existing.source_record_id,
-                            ) = ("camara", vr.source_url, seen, vr.id)
+                        upsert_voting(session, client, item, run_id, seen, proposition_rows)
                     run = session.get(ImportRun, run_id)
                     run.status, run.finished_at, run.received, run.inserted = (
                         "success",
