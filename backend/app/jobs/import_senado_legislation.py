@@ -5,6 +5,7 @@ import json
 import re
 from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
+from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy import select, text, update
@@ -253,9 +254,37 @@ def upsert_proposition(session, item: dict, run_id: UUID, seen: datetime):
     return row
 
 
-def upsert_voting(session, client, item, run_id, seen, voting_year, propositions=None, coverage=None):
+def historical_senator(session, vote, origin, seen):
+    """Identidade histórica explícita, sem presumir mandato ou exercício atual."""
+    code = str(vote.get("CodigoParlamentar") or "")
+    name = vote.get("NomeParlamentar")
+    if not re.fullmatch(r"[1-9]\d{0,19}", code) or not isinstance(name, str) or not 1 <= len(name.strip()) <= 250:
+        return None
+    profile = vote.get("Url")
+    if not isinstance(profile, str):
+        return None
+    try:
+        url = urlsplit(profile)
+        if (url.scheme not in {"http", "https"} or url.hostname != "www25.senado.leg.br"
+                or url.path != f"/web/senadores/senador/-/perfil/{code}"
+                or url.username or url.password or url.port is not None or url.query or url.fragment):
+            return None
+    except (ValueError, TypeError):
+        return None
+    person = Parliamentarian(
+        source=SOURCE, external_id=code, name=name.strip(), is_current=False,
+        source_url=f"https://www25.senado.leg.br{url.path}", source_record_id=origin.id,
+        collected_at=seen,
+    )
+    session.add(person)
+    session.flush()
+    return person
+
+
+def upsert_voting(session, client, item, run_id, seen, voting_year, propositions=None, coverage=None, allow_historical=False):
     coverage = coverage if coverage is not None else {}
-    coverage.update(published=0, matched=0, missing_parliamentarians=0, unrecognized_positions=0)
+    coverage.update(published=0, matched=0, missing_parliamentarians=0, unrecognized_positions=0,
+                    historical_parliamentarians_created=0)
     propositions = propositions or {}
     code = item.get("CodigoVotacaoSve") or item.get("CodigoSessaoVotacao")
     if not code:
@@ -338,6 +367,10 @@ def upsert_voting(session, client, item, run_id, seen, voting_year, propositions
                 == str(vote.get("CodigoParlamentar")),
             )
         )
+        if person is None and allow_historical:
+            person = historical_senator(session, vote, record, seen)
+            if person is not None:
+                coverage["historical_parliamentarians_created"] += 1
         if person is None:
             coverage["missing_parliamentarians"] += 1
             continue

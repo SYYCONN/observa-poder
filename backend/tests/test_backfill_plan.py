@@ -3,8 +3,28 @@ from datetime import date
 
 import httpx
 import pytest
+from unittest.mock import Mock
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from app.jobs import backfill_legislation as job
+from app.jobs.import_senado_legislation import historical_senator
+
+
+@pytest.mark.parametrize("profile", [
+    "https://evil.example/web/senadores/senador/-/perfil/5732",
+    "https://www25.senado.leg.br/web/senadores/senador/-/perfil/9999",
+    "https://user:password@www25.senado.leg.br/web/senadores/senador/-/perfil/5732",
+    "https://www25.senado.leg.br:0/web/senadores/senador/-/perfil/5732",
+    "https://www25.senado.leg.br/web/senadores/senador/-/perfil/5732?token=fixture",
+    "https://www25.senado.leg.br/web/senadores/senador/-/perfil/5732#fragment",
+    123,
+])
+def test_historical_identity_rejects_inconsistent_profile_without_writing(profile):
+    db = Mock()
+    vote = {"CodigoParlamentar": "5732", "NomeParlamentar": "Nome público de teste", "Url": profile}
+    assert historical_senator(db, vote, SimpleNamespace(id="fixture"), datetime.now(timezone.utc)) is None
+    db.add.assert_not_called()
 
 
 @pytest.mark.parametrize("identifier", ["../secret", "https://other.example", "1?token=x", "0", "1/2"])

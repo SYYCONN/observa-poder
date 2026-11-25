@@ -49,6 +49,27 @@ identidades nem posições. Votação cuja fonte publica lista vazia não recebe
 inventados nem modalidade presumida. Os contadores de `import_runs` registram a
 tentativa do lote; a cobertura detalhada fica no checkpoint e na saída JSON.
 
+### Identidades históricas do Senado
+
+A recuperação explícita permite cadastrar uma identidade histórica quando o
+arquivo oficial informa simultaneamente código numérico, nome e URL do perfil
+`www25.senado.leg.br/web/senadores/senador/-/perfil/CODIGO`, com o mesmo código.
+Credenciais na URL, outro host, código divergente, porta, query ou fragmento são
+rejeitados. URLs legadas HTTP são normalizadas para HTTPS no mesmo perfil oficial.
+
+O registro conserva a proveniência da votação, é marcado como cadastro histórico
+e não recebe mandato, datas, partido, UF ou foto inferidos desse evento. Cadastros
+existentes não têm nome nem indicação de exercício atual sobrescritos. O status de
+exercício atual continua sob responsabilidade da lista oficial de senadores atuais.
+Essa criação é habilitada somente no backfill; a coleta recente mantém sua política.
+O lock de cadastro dos senadores atuais também é adquirido para impedir concorrência.
+
+Na investigação de 25/11/2026, os primeiros 25 registros anuais incluíam oito códigos
+oficiais ausentes da listagem pública de produção. O ensaio local com a correção
+processou esses 25 registros com sucesso, deixando 73 itens pendentes para os lotes
+seguintes. Isso não declara o plano anual completo. A execução da correção na VPS
+deve reutilizar `/state/senado-2026.json`, preservando o checkpoint já existente.
+
 ## Implantação e primeiro plano na VPS
 
 Depois de atualizar o repositório e construir a imagem do scheduler, prepare um

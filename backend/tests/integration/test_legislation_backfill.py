@@ -13,6 +13,8 @@ from app.jobs import backfill_legislation as job
 from app.modules.coletas.models import ImportRun
 from app.modules.proposicoes.models import Proposition
 from app.modules.votacoes.models import Voting
+from app.modules.votacoes.models import Vote
+from app.modules.parlamentares.models import Parliamentarian, Mandate
 
 
 @pytest.fixture
@@ -185,3 +187,62 @@ def test_senate_annual_discovery_is_not_limited_to_recent_fifty(engine, tmp_path
         assert len(calls) == previous_calls
         with Session(engine) as db:
             assert db.scalar(select(func.count()).select_from(Voting)) == 53
+
+
+@pytest.mark.parametrize("valid_identity", [True, False])
+def test_senate_historical_identity_requires_matching_official_profile(engine, tmp_path, valid_identity):
+    code = "5732"
+    profile_code = code if valid_identity else "9999"
+    item = {"CodigoVotacaoSve": "4360", "DataSessao": "2026-02-24", "DescricaoVotacao": "Votação nominal",
+        "Resultado": "A", "Votos": {"VotoParlamentar": [{"CodigoParlamentar": code,
+            "NomeParlamentar": "Nome publicado no evento", "Voto": "Sim", "SiglaPartido": "ABC", "SiglaUF": "SP",
+            "Url": f"http://www25.senado.leg.br/web/senadores/senador/-/perfil/{profile_code}"}]}}
+    def annual(r):
+        return httpx.Response(200, json={"ListaVotacoes": {"Votacoes": {"Votacao": [item]}}})
+    request = job.plan("senado", voting_ids=["4360"], year=2026)
+    with httpx.Client(transport=httpx.MockTransport(annual)) as client:
+        result = job.backfill(engine, request, tmp_path / "historical.json", client=client)
+        with Session(engine) as db:
+            if not valid_identity:
+                assert not result["coverage_complete"]
+                assert db.scalar(select(func.count()).select_from(Parliamentarian)) == 0
+                assert db.scalar(select(func.count()).select_from(Vote)) == 0
+                return
+            assert result["coverage_complete"]
+            person = db.scalars(select(Parliamentarian)).one()
+            assert person.external_id == code and not person.is_current
+            assert person.source_url.startswith("https://www25.senado.leg.br/")
+            assert db.scalar(select(func.count()).select_from(Mandate)) == 0
+            assert db.scalar(select(func.count()).select_from(Vote)) == 1
+
+        assert job.backfill(engine, request, tmp_path / "historical.json", client=client)["processed"] == 0
+        with Session(engine) as db, db.begin():
+            person = db.scalars(select(Parliamentarian)).one()
+            person.name, person.is_current = "Nome confirmado no cadastro atual", True
+        assert job.backfill(engine, request, tmp_path / "refresh.json", client=client)["coverage_complete"]
+        with Session(engine) as db:
+            person = db.scalars(select(Parliamentarian)).one()
+            assert person.name == "Nome confirmado no cadastro atual" and person.is_current
+            assert db.scalar(select(func.count()).select_from(Vote)) == 1
+
+
+def test_failed_senate_checkpoint_resumes_after_historical_identity_fix(engine, tmp_path, monkeypatch):
+    item = {"CodigoVotacaoSve": "4360", "DataSessao": "2026-02-24", "DescricaoVotacao": "Votação nominal",
+        "Resultado": "A", "Votos": {"VotoParlamentar": [{"CodigoParlamentar": "5732",
+            "NomeParlamentar": "Identidade oficial de teste", "Voto": "Sim",
+            "Url": "http://www25.senado.leg.br/web/senadores/senador/-/perfil/5732"}]}}
+    def annual(r):
+        return httpx.Response(200, json={"ListaVotacoes": {"Votacoes": {"Votacao": [item]}}})
+    path = tmp_path / "same-checkpoint.json"
+    request = job.plan("senado", voting_ids=["4360"], year=2026)
+    with httpx.Client(transport=httpx.MockTransport(annual)) as client:
+        with monkeypatch.context() as old_version:
+            old_version.setattr(job.senado, "historical_senator", lambda *args: None)
+            first = job.backfill(engine, request, path, client=client)
+            assert first["counts"]["failed"] == 1
+        second = job.backfill(engine, request, path, client=client)
+        assert second["coverage_complete"] and second["counts"]["success"] == 1
+        assert job.backfill(engine, request, path, client=client)["processed"] == 0
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(Parliamentarian)) == 1
+        assert db.scalar(select(func.count()).select_from(Vote)) == 1

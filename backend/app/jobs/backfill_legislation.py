@@ -20,6 +20,7 @@ from app.db.session import get_engine
 from app.jobs import import_legislation as camara
 from app.jobs import import_senado_legislation as senado
 from app.jobs.import_camara_votes import LOCK_KEY as ANNUAL_VOTES_LOCK
+from app.jobs.import_senators import LOCK_KEY as CURRENT_SENATORS_LOCK
 from app.modules.coletas.models import ImportRun
 from app.modules.proposicoes.models import ProceedingsEvent
 
@@ -154,7 +155,8 @@ def recover_item(session, client, source, target, run_id, seen, annual, year):
         if target["kind"] == "voting":
             if identifier not in annual:
                 return "unavailable"
-            senado.upsert_voting(session, client, annual[identifier], run_id, seen, year, coverage=coverage)
+            senado.upsert_voting(session, client, annual[identifier], run_id, seen, year,
+                                 coverage=coverage, allow_historical=True)
             code = annual[identifier].get("CodigoMateria")
             target["metadata"]["related_propositions"] = [str(code)] if str(code or "").isdigit() else []
             target["metadata"]["vote_coverage"] = coverage
@@ -217,13 +219,13 @@ def backfill(engine, request, checkpoint, max_items=10, pages=1, client=None, re
             if not lock.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key}):
                 raise RuntimeError("Existe outra coleta desta fonte em execução.")
             lock.commit()
-            annual_locked = False
+            extra_locked = False
+            extra_key = ANNUAL_VOTES_LOCK if request["source"] == "camara" else CURRENT_SENATORS_LOCK
             try:
-                if request["source"] == "camara":
-                    if not lock.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": ANNUAL_VOTES_LOCK}):
-                        raise RuntimeError("Existe uma carga anual de votos em execução.")
-                    annual_locked = True
-                    lock.commit()
+                if not lock.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": extra_key}):
+                    raise RuntimeError("Existe uma carga anual de votos ou cadastro de senadores em execução.")
+                extra_locked = True
+                lock.commit()
                 if path.exists() and path.stat().st_size > 32 * 1024**2:
                     raise ValueError("Checkpoint excedeu o limite de tamanho.")
                 state = json.loads(path.read_text()) if path.exists() else dict(
@@ -297,8 +299,8 @@ def backfill(engine, request, checkpoint, max_items=10, pages=1, client=None, re
                         run.status, run.finished_at, run.error_code = "failed", camara.now(), type(exc).__name__
                     raise
             finally:
-                if annual_locked:
-                    lock.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": ANNUAL_VOTES_LOCK})
+                if extra_locked:
+                    lock.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": extra_key})
                 lock.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
                 lock.commit()
     finally:
